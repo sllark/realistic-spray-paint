@@ -1,0 +1,114 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Realistic Spray Paint</title>
+    <link rel="stylesheet" href="styles.css" />
+  </head>
+  <body>
+    <div id="app">
+      <canvas id="sprayCanvas"></canvas>
+
+      <div id="controls">
+        <div class="control-group">
+          <label for="colorPicker">Color:</label>
+          <input type="color" id="colorPicker" value="#000000" />
+        </div>
+
+        <div class="control-group">
+          <label for="nozzleSlider">Nozzle Size:</label>
+          <input type="range" id="nozzleSlider" min="6" max="60" value="10" />
+          <span id="nozzleValue">18</span>
+        </div>
+
+        <div class="control-group">
+          <label for="softnessSlider">Softness:</label>
+          <input
+            type="range"
+            id="softnessSlider"
+            min="70"
+            max="95"
+            value="70"
+          />
+          <span id="softnessValue">88%</span>
+        </div>
+
+        <div class="control-group">
+          <label for="opacitySlider">Opacity:</label>
+          <input
+            type="range"
+            id="opacitySlider"
+            min="80"
+            max="100"
+            value="100"
+          />
+          <span id="opacityValue">98%</span>
+        </div>
+
+        <div class="control-group">
+          <label for="flowSlider">Flow:</label>
+          <input type="range" id="flowSlider" min="80" max="120" value="85" />
+          <span id="flowValue">100%</span>
+        </div>
+
+        <div class="control-group">
+          <label for="dripsToggle">Drips:</label>
+          <input type="checkbox" id="dripsToggle" />
+        </div>
+
+        <div class="control-group">
+          <label for="scatterRadiusSlider">Scatter Radius:</label>
+          <input
+            type="range"
+            id="scatterRadiusSlider"
+            min="100"
+            max="200"
+            value="160"
+          />
+          <span id="scatterRadiusValue">130%</span>
+        </div>
+
+        <div class="control-group">
+          <label for="scatterAmountSlider">Scatter Amount:</label>
+          <input
+            type="range"
+            id="scatterAmountSlider"
+            min="20"
+            max="100"
+            value="80"
+          />
+          <span id="scatterAmountValue">60%</span>
+        </div>
+
+        <div class="control-group">
+          <label for="scatterSizeSlider">Scatter Size:</label>
+          <input
+            type="range"
+            id="scatterSizeSlider"
+            min="50"
+            max="150"
+            value="101"
+          />
+          <span id="scatterSizeValue">100%</span>
+        </div>
+
+        <div class="control-group">
+          <button id="clearBtn">Clear</button>
+          <button id="exportBtn">Export PNG</button>
+        </div>
+
+        <div class="control-group help-text">
+          <small
+            >Press 'M' to toggle scatter controls | Space to toggle drips</small
+          >
+        </div>
+      </div>
+    </div>
+
+    <script src="js/spray.js"></script>
+    <script src="js/drawer-canvas.js"></script>
+    <script src="js/draw-shapes.js"></script>
+    <script src="js/main.js"></script>
+  </body>
+</html>
