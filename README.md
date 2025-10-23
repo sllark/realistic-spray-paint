@@ -5,24 +5,27 @@ A high-performance, realistic spray paint simulator built with HTML5 Canvas and 
 ## ✨ Features
 
 - **Granular Noisy Path** - Individual dots create realistic spray texture with gaps on first pass, solid coverage on multiple passes
+- **Sophisticated Grain Control** - Log-normal distribution with environmental factors (distance, pressure) for ultra-realistic texture
 - **Dynamic Mist Effects** - Directional overspray with variable density and size
+- **Overspray Effect** - Excess paint that spreads beyond the main spray area for natural realism
 - **Circular Distribution** - Proper circular spray patterns instead of square
 - **Zero-Gap Drawing** - Smooth continuous lines at any speed
-- **Real-time Controls** - Adjust color, nozzle size, opacity, flow, and scatter effects
+- **Real-time Controls** - Adjust color, nozzle size, opacity, flow, scatter effects, and overspray
 - **60fps Performance** - Optimized for smooth real-time painting
 
 ## 🎨 Controls
 
-| Control            | Range        | Default | Description               |
-| ------------------ | ------------ | ------- | ------------------------- |
-| **Color**          | Color picker | Black   | Choose spray paint color  |
-| **Nozzle Size**    | 2-120px      | 80px    | Spray width and intensity |
-| **Softness**       | 70-95%       | 95%     | Edge softness of spray    |
-| **Opacity**        | 80-100%      | 100%    | Paint transparency        |
-| **Flow**           | 80-120%      | 110%    | Paint output rate         |
-| **Scatter Radius** | 100-200%     | 120%    | Mist spread distance      |
-| **Scatter Amount** | 20-100%      | 100%    | Mist particle density     |
-| **Scatter Size**   | 50-150%      | 150%    | Mist particle size        |
+| Control            | Range        | Default | Description                   |
+| ------------------ | ------------ | ------- | ----------------------------- |
+| **Color**          | Color picker | Black   | Choose spray paint color      |
+| **Nozzle Size**    | 2-120px      | 80px    | Spray width and intensity     |
+| **Softness**       | 70-95%       | 95%     | Edge softness of spray        |
+| **Opacity**        | 80-100%      | 100%    | Paint transparency            |
+| **Flow**           | 80-120%      | 110%    | Paint output rate             |
+| **Scatter Radius** | 100-200%     | 120%    | Mist spread distance          |
+| **Scatter Amount** | 20-100%      | 100%    | Mist particle density         |
+| **Scatter Size**   | 50-150%      | 150%    | Mist particle size            |
+| **Overspray**      | 0-100%       | 30%     | Excess paint beyond main area |
 
 ## ⌨️ Keyboard Shortcuts
 
@@ -58,6 +61,8 @@ A high-performance, realistic spray paint simulator built with HTML5 Canvas and 
 - **Canvas API** - High-performance 2D rendering
 - **Device Pixel Ratio** - Crisp graphics on all displays
 - **Granular Dots** - Individual dot rendering for noisy path effect
+- **Log-Normal Distribution** - Box-Muller transform for realistic grain variation
+- **Environmental Factors** - Distance and pressure affect grain size and opacity
 - **Circular Distribution** - Math.sqrt() for uniform circular spray patterns
 - **Scatter Controls** - Real-time adjustment of mist effects
 - **Performance Optimization** - 60fps with efficient dot rendering

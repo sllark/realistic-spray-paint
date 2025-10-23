@@ -28,6 +28,9 @@ class SprayPaint {
     this.scatterRadiusMultiplier = 1.2; // 120% default - moderate spread
     this.scatterAmountMultiplier = 1.0; // 100% default - full density
     this.scatterSizeMultiplier = 1.5; // 150% default - larger particles
+
+    // Overspray control
+    this.oversprayMultiplier = 0.3; // 30% default - moderate overspray
   }
 
   setColor(color) {
@@ -60,6 +63,60 @@ class SprayPaint {
 
   setScatterSize(size) {
     this.scatterSizeMultiplier = size / 100; // Convert percentage to multiplier
+  }
+
+  setOverspray(overspray) {
+    this.oversprayMultiplier = overspray / 100; // Convert percentage to multiplier
+  }
+
+  // --- Helper functions for sophisticated grain control ---
+  randn() {
+    // Box–Muller transform for normal distribution
+    let u = 1 - Math.random(),
+      v = 1 - Math.random();
+    return Math.sqrt(-2 * Math.log(u)) * Math.cos(2 * Math.PI * v);
+  }
+
+  clamp(x, a, b) {
+    return Math.max(a, Math.min(b, x));
+  }
+
+  calculateGrainSize(baseRadius, size) {
+    // Base controls
+    const distance = 12; // Default distance in pixels
+    const pressure = this.pressure || 0.7; // Current pressure (0..1)
+
+    // --- grain size: log-normal with gentle caps ---
+    const mu = 0.0; // median multiplier ~ e^mu = 1.0
+    const sigma = 0.35; // spread; 0.3–0.5 feels good
+    let sizeFactor = Math.exp(mu + sigma * this.randn());
+
+    // occasional large splats (1–2%)
+    if (Math.random() < 0.02) sizeFactor *= 1.8 + Math.random() * 1.2;
+
+    // map to environment: farther distance → larger blur footprint; high pressure → finer grain
+    sizeFactor *= (distance / 15) * (1 / Math.sqrt(pressure + 0.2));
+
+    // cap extremes so it doesn't go crazy
+    sizeFactor = this.clamp(sizeFactor, 0.35, 2.2);
+
+    // final pixel radius (keep a floor so AA doesn't swallow tiny dots)
+    return Math.max(0.5, baseRadius * sizeFactor);
+  }
+
+  calculateGrainOpacity(baseOpacity, sizeFactor) {
+    // --- opacity: slight positive correlation with size, but with plateau ---
+    const sizeOpacityBoost = this.clamp(
+      0.6 + 0.5 * Math.sqrt(sizeFactor),
+      0.5,
+      1.25
+    );
+    // per-dot jitter so it's not flat
+    const jitter = 0.85 + Math.random() * 0.25; // 0.85–1.10
+    let dotOpacity = baseOpacity * sizeOpacityBoost * jitter;
+
+    // safety clamp
+    return this.clamp(dotOpacity, 0.05, 1.0);
   }
 
   startDrawing(x, y, pressure = 1.0) {
@@ -269,6 +326,7 @@ class SprayPaint {
     this.ctx.fillStyle = this.color;
     this.ctx.globalAlpha = this.opacity;
 
+    // Main spray area dots
     for (let i = 0; i < numDots; i++) {
       // Create uniform circular distribution (no center bias)
       const scatterRadius = size * 0.4 * this.scatterRadiusMultiplier; // Apply scatter radius multiplier
@@ -277,8 +335,15 @@ class SprayPaint {
       const dotX = x + Math.cos(angle) * distance;
       const dotY = y + Math.sin(angle) * distance;
 
-      // Ultra tiny random dot sizes for maximum granularity with scatter size control
-      const randomSize = dotRadius * (0.1 + Math.random() * 0.9);
+      // Use sophisticated grain control system
+      const randomSize = this.calculateGrainSize(dotRadius, size);
+      const dotOpacity = this.calculateGrainOpacity(
+        this.opacity,
+        randomSize / dotRadius
+      );
+
+      // Set individual dot opacity
+      this.ctx.globalAlpha = dotOpacity;
 
       // Draw individual dot
       this.ctx.beginPath();
@@ -286,7 +351,58 @@ class SprayPaint {
       this.ctx.fill();
     }
 
+    // Add overspray effect - excess paint that spreads beyond the main area
+    this.addOverspray(x, y, size);
+
     this.ctx.restore();
+  }
+
+  addOverspray(x, y, size) {
+    // Skip overspray if multiplier is 0
+    if (this.oversprayMultiplier <= 0) return;
+
+    // Overspray settings - excess paint that spreads beyond the main spray area
+    const oversprayRadius = size * 0.8; // Overspray extends beyond main spray
+    const oversprayDensity = 0.3 * this.oversprayMultiplier; // Use overspray multiplier
+    const numOversprayDots = Math.floor(
+      size * 4.0 * this.flow * this.scatterAmountMultiplier * oversprayDensity
+    );
+    const oversprayDotRadius = Math.max(
+      0.05,
+      size * 0.003 * this.scatterSizeMultiplier
+    ); // Smaller than main dots
+    const oversprayOpacity = this.opacity * 0.4 * this.oversprayMultiplier; // Use overspray multiplier for opacity
+
+    this.ctx.globalAlpha = oversprayOpacity;
+
+    for (let i = 0; i < numOversprayDots; i++) {
+      // Create overspray in a larger radius around the main spray
+      const angle = Math.random() * Math.PI * 2;
+      const distance = Math.sqrt(Math.random()) * oversprayRadius;
+      const dotX = x + Math.cos(angle) * distance;
+      const dotY = y + Math.sin(angle) * distance;
+
+      // Skip dots that are too close to the center (main spray area)
+      const distanceFromCenter = Math.sqrt((dotX - x) ** 2 + (dotY - y) ** 2);
+      if (distanceFromCenter < size * 0.3) {
+        continue; // Skip dots in the main spray area
+      }
+
+      // Use sophisticated grain control for overspray too
+      const randomSize = this.calculateGrainSize(oversprayDotRadius, size);
+      const dotOversprayOpacity = this.calculateGrainOpacity(
+        oversprayOpacity,
+        randomSize / oversprayDotRadius
+      );
+
+      // Set individual overspray dot opacity
+      this.ctx.globalAlpha = dotOversprayOpacity;
+
+      // Draw overspray dot
+      this.ctx.beginPath();
+      this.ctx.arc(dotX, dotY, randomSize, 0, Math.PI * 2);
+      this.ctx.fill();
+    }
   }
 
   createStamp(size) {

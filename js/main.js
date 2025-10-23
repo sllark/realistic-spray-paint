@@ -14,6 +14,7 @@ class SprayPaintApp {
     this.scatterRadiusSlider = null;
     this.scatterAmountSlider = null;
     this.scatterSizeSlider = null;
+    this.overspraySlider = null;
     this.clearBtn = null;
     this.exportBtn = null;
 
@@ -25,6 +26,7 @@ class SprayPaintApp {
     this.scatterRadiusValue = null;
     this.scatterAmountValue = null;
     this.scatterSizeValue = null;
+    this.oversprayValue = null;
 
     this.init();
   }
@@ -77,6 +79,7 @@ class SprayPaintApp {
     this.scatterRadiusSlider = document.getElementById("scatterRadiusSlider");
     this.scatterAmountSlider = document.getElementById("scatterAmountSlider");
     this.scatterSizeSlider = document.getElementById("scatterSizeSlider");
+    this.overspraySlider = document.getElementById("overspraySlider");
     this.clearBtn = document.getElementById("clearBtn");
     this.exportBtn = document.getElementById("exportBtn");
 
@@ -88,6 +91,7 @@ class SprayPaintApp {
     this.scatterRadiusValue = document.getElementById("scatterRadiusValue");
     this.scatterAmountValue = document.getElementById("scatterAmountValue");
     this.scatterSizeValue = document.getElementById("scatterSizeValue");
+    this.oversprayValue = document.getElementById("oversprayValue");
 
     // Setup event listeners
     this.setupEventListeners();
@@ -149,6 +153,13 @@ class SprayPaintApp {
       const value = parseInt(e.target.value);
       this.sprayPaint.setScatterSize(value);
       this.scatterSizeValue.textContent = value + "%";
+    });
+
+    // Overspray slider
+    this.overspraySlider.addEventListener("input", (e) => {
+      const value = parseInt(e.target.value);
+      this.sprayPaint.setOverspray(value);
+      this.oversprayValue.textContent = value + "%";
     });
 
     // Clear button
@@ -218,6 +229,7 @@ class SprayPaintApp {
     this.scatterRadiusValue.textContent = this.scatterRadiusSlider.value + "%";
     this.scatterAmountValue.textContent = this.scatterAmountSlider.value + "%";
     this.scatterSizeValue.textContent = this.scatterSizeSlider.value + "%";
+    this.oversprayValue.textContent = this.overspraySlider.value + "%";
 
     // Set initial spray paint values
     this.sprayPaint.setColor(this.colorPicker.value);
@@ -228,6 +240,7 @@ class SprayPaintApp {
     this.sprayPaint.setScatterRadius(parseInt(this.scatterRadiusSlider.value));
     this.sprayPaint.setScatterAmount(parseInt(this.scatterAmountSlider.value));
     this.sprayPaint.setScatterSize(parseInt(this.scatterSizeSlider.value));
+    this.sprayPaint.setOverspray(parseInt(this.overspraySlider.value));
   }
 
   // Public methods for external control
