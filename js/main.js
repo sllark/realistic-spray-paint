@@ -15,6 +15,12 @@ class SprayPaintApp {
     this.scatterAmountSlider = null;
     this.scatterSizeSlider = null;
     this.overspraySlider = null;
+    this.distanceSlider = null;
+    this.dripThresholdSlider = null;
+    this.dripGravitySlider = null;
+    this.dripViscositySlider = null;
+    this.dripEvaporationSlider = null;
+    this.dripToggleBtn = null;
     this.clearBtn = null;
     this.exportBtn = null;
 
@@ -27,6 +33,11 @@ class SprayPaintApp {
     this.scatterAmountValue = null;
     this.scatterSizeValue = null;
     this.oversprayValue = null;
+    this.distanceValue = null;
+    this.dripThresholdValue = null;
+    this.dripGravityValue = null;
+    this.dripViscosityValue = null;
+    this.dripEvaporationValue = null;
 
     this.init();
   }
@@ -50,6 +61,9 @@ class SprayPaintApp {
         this.canvasDrawer.canvas,
         this.canvasDrawer.ctx
       );
+
+      // start drip simulation
+      this.sprayPaint.startDripLoop();
 
       // Initialize shape drawer
       this.shapeDrawer = new ShapeDrawer(this.sprayPaint);
@@ -80,6 +94,14 @@ class SprayPaintApp {
     this.scatterAmountSlider = document.getElementById("scatterAmountSlider");
     this.scatterSizeSlider = document.getElementById("scatterSizeSlider");
     this.overspraySlider = document.getElementById("overspraySlider");
+    this.distanceSlider = document.getElementById("distanceSlider");
+    this.dripThresholdSlider = document.getElementById("dripThresholdSlider");
+    this.dripGravitySlider = document.getElementById("dripGravitySlider");
+    this.dripViscositySlider = document.getElementById("dripViscositySlider");
+    this.dripEvaporationSlider = document.getElementById(
+      "dripEvaporationSlider"
+    );
+    this.dripToggleBtn = document.getElementById("dripToggleBtn");
     this.clearBtn = document.getElementById("clearBtn");
     this.exportBtn = document.getElementById("exportBtn");
 
@@ -92,6 +114,11 @@ class SprayPaintApp {
     this.scatterAmountValue = document.getElementById("scatterAmountValue");
     this.scatterSizeValue = document.getElementById("scatterSizeValue");
     this.oversprayValue = document.getElementById("oversprayValue");
+    this.distanceValue = document.getElementById("distanceValue");
+    this.dripThresholdValue = document.getElementById("dripThresholdValue");
+    this.dripGravityValue = document.getElementById("dripGravityValue");
+    this.dripViscosityValue = document.getElementById("dripViscosityValue");
+    this.dripEvaporationValue = document.getElementById("dripEvaporationValue");
 
     // Setup event listeners
     this.setupEventListeners();
@@ -162,6 +189,52 @@ class SprayPaintApp {
       this.oversprayValue.textContent = value + "%";
     });
 
+    // Distance slider
+    this.distanceSlider.addEventListener("input", (e) => {
+      const value = parseInt(e.target.value);
+      this.sprayPaint.setDistance(value);
+      this.distanceValue.textContent = value + "px";
+    });
+
+    // Drip threshold slider
+    this.dripThresholdSlider.addEventListener("input", (e) => {
+      const value = parseInt(e.target.value);
+      this.sprayPaint.setDripThreshold(value);
+      this.dripThresholdValue.textContent = value + "%";
+    });
+
+    // Drip gravity slider
+    this.dripGravitySlider.addEventListener("input", (e) => {
+      const value = parseInt(e.target.value);
+      this.sprayPaint.setDripGravity(value);
+      this.dripGravityValue.textContent = value;
+    });
+
+    // Drip viscosity slider
+    this.dripViscositySlider.addEventListener("input", (e) => {
+      const value = parseFloat(e.target.value);
+      this.sprayPaint.setDripViscosity(value);
+      this.dripViscosityValue.textContent = value.toFixed(1);
+    });
+
+    // Drip evaporation slider
+    this.dripEvaporationSlider.addEventListener("input", (e) => {
+      const value = parseFloat(e.target.value);
+      this.sprayPaint.setDripEvaporation(value);
+      this.dripEvaporationValue.textContent = (value / 100).toFixed(2);
+    });
+
+    // Drip toggle button
+    this.dripToggleBtn.addEventListener("click", () => {
+      const enabled = this.sprayPaint.toggleDrips();
+      this.dripToggleBtn.textContent = enabled
+        ? "Disable Drips"
+        : "Enable Drips";
+      this.dripToggleBtn.style.backgroundColor = enabled
+        ? "#4CAF50"
+        : "#f44336";
+    });
+
     // Clear button
     this.clearBtn.addEventListener("click", () => {
       this.canvasDrawer.clear();
@@ -204,6 +277,13 @@ class SprayPaintApp {
     // Space bar to toggle drips
     if (e.key === " ") {
       e.preventDefault();
+      const enabled = this.sprayPaint.toggleDrips();
+      this.dripToggleBtn.textContent = enabled
+        ? "Disable Drips"
+        : "Enable Drips";
+      this.dripToggleBtn.style.backgroundColor = enabled
+        ? "#4CAF50"
+        : "#f44336";
     }
 
     // 'M' key to toggle scatter controls visibility
@@ -211,6 +291,19 @@ class SprayPaintApp {
       e.preventDefault();
       const scatterControls = document.querySelectorAll('[id*="scatter"]');
       scatterControls.forEach((control) => {
+        const parent = control.closest(".control-group");
+        if (parent) {
+          parent.style.display =
+            parent.style.display === "none" ? "flex" : "none";
+        }
+      });
+    }
+
+    // 'D' key to toggle drip controls visibility
+    if (e.key === "d" || e.key === "D") {
+      e.preventDefault();
+      const dripControls = document.querySelectorAll('[id*="drip"]');
+      dripControls.forEach((control) => {
         const parent = control.closest(".control-group");
         if (parent) {
           parent.style.display =
@@ -230,6 +323,13 @@ class SprayPaintApp {
     this.scatterAmountValue.textContent = this.scatterAmountSlider.value + "%";
     this.scatterSizeValue.textContent = this.scatterSizeSlider.value + "%";
     this.oversprayValue.textContent = this.overspraySlider.value + "%";
+    this.distanceValue.textContent = this.distanceSlider.value + "px";
+    this.dripThresholdValue.textContent = this.dripThresholdSlider.value + "%";
+    this.dripGravityValue.textContent = this.dripGravitySlider.value;
+    this.dripViscosityValue.textContent = this.dripViscositySlider.value;
+    this.dripEvaporationValue.textContent = (
+      parseFloat(this.dripEvaporationSlider.value) / 100
+    ).toFixed(2);
 
     // Set initial spray paint values
     this.sprayPaint.setColor(this.colorPicker.value);
@@ -241,6 +341,15 @@ class SprayPaintApp {
     this.sprayPaint.setScatterAmount(parseInt(this.scatterAmountSlider.value));
     this.sprayPaint.setScatterSize(parseInt(this.scatterSizeSlider.value));
     this.sprayPaint.setOverspray(parseInt(this.overspraySlider.value));
+    this.sprayPaint.setDistance(parseInt(this.distanceSlider.value));
+    this.sprayPaint.setDripThreshold(parseInt(this.dripThresholdSlider.value));
+    this.sprayPaint.setDripGravity(parseInt(this.dripGravitySlider.value));
+    this.sprayPaint.setDripViscosity(
+      parseFloat(this.dripViscositySlider.value)
+    );
+    this.sprayPaint.setDripEvaporation(
+      parseFloat(this.dripEvaporationSlider.value)
+    );
   }
 
   // Public methods for external control
