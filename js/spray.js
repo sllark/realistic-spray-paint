@@ -10,18 +10,10 @@ class SprayPaint {
 
     // Spray settings
     this.color = "#000000";
-    this.nozzleSize = 10;
-    this.softness = 0.85; // More subtle softness
-    this.opacity = 0.8; // More subtle opacity
-    this.flow = 0.85; // More subtle flow
-    this.dripsEnabled = false;
-
-    // Drip system
-    this.dripThreshold = 35;
-    this.dripSpeed = 5;
-    this.dripAccumulator = 0;
-    this.dripGrid = null;
-    this.dripFunctions = [];
+    this.nozzleSize = 80;
+    this.softness = 0.95; // Maximum softness
+    this.opacity = 1.0; // Maximum opacity
+    this.flow = 1.1; // Enhanced flow
 
     // Performance optimization
     this.stampCache = new Map();
@@ -33,9 +25,9 @@ class SprayPaint {
     this.pressureSmoothing = 0.2;
 
     // Scatter controls
-    this.scatterRadiusMultiplier = 1.61; // 161% default - more subtle spread
-    this.scatterAmountMultiplier = 0.8; // 80% default - more subtle density
-    this.scatterSizeMultiplier = 1; // 100% default - smaller particles
+    this.scatterRadiusMultiplier = 1.2; // 120% default - moderate spread
+    this.scatterAmountMultiplier = 1.0; // 100% default - full density
+    this.scatterSizeMultiplier = 1.5; // 150% default - larger particles
   }
 
   setColor(color) {
@@ -43,7 +35,7 @@ class SprayPaint {
   }
 
   setNozzleSize(size) {
-    this.nozzleSize = Math.max(6, Math.min(60, size));
+    this.nozzleSize = Math.max(2, Math.min(120, size));
   }
 
   setSoftness(softness) {
@@ -56,10 +48,6 @@ class SprayPaint {
 
   setFlow(flow) {
     this.flow = Math.max(0.8, Math.min(1.2, flow / 100));
-  }
-
-  setDripsEnabled(enabled) {
-    this.dripsEnabled = enabled;
   }
 
   setScatterRadius(radius) {
@@ -81,12 +69,6 @@ class SprayPaint {
     this.currentX = x;
     this.currentY = y;
     this.pressure = pressure;
-    this.dripAccumulator = 0;
-    this.dripPoints = [];
-    this.lastDripTime = Date.now();
-
-    // Add initial spray burst effect for natural start
-    this.addSprayBurst(x, y);
   }
 
   draw(x, y, pressure = 1.0) {
@@ -103,13 +85,6 @@ class SprayPaint {
 
     // Use continuous line drawing for smooth coverage
     this.drawContinuousLine(this.lastX, this.lastY, x, y);
-
-    // Update drip accumulator
-    if (this.dripsEnabled) {
-      this.dripAccumulator += distance;
-      this.updateDrips(x, y);
-      this.updateDripFunctions();
-    }
 
     // Periodic cache cleanup
     if (Math.random() < 0.01) {
@@ -273,40 +248,45 @@ class SprayPaint {
   stamp(x, y) {
     const now = Date.now();
     if (now - this.lastStampTime < this.stampInterval) {
-      console.log(
-        `⏰ Stamp throttled: ${now - this.lastStampTime}ms since last stamp`
-      );
       return;
     }
     this.lastStampTime = now;
 
-    // Calculate effective size based on pressure
     const effectiveSize = this.nozzleSize * (0.8 + this.pressure * 0.4);
-    const effectiveOpacity = this.opacity * (0.9 + this.pressure * 0.1);
 
-    // Create or get cached stamp
-    const cacheKey = `${Math.floor(effectiveSize)}_${Math.floor(
-      this.softness * 100
-    )}`;
-    let stampCanvas = this.stampCache.get(cacheKey);
+    // Create noisy path with individual dots instead of solid stamps
+    this.createNoisyPath(x, y, effectiveSize);
+  }
 
-    if (!stampCanvas) {
-      stampCanvas = this.createStamp(effectiveSize);
-      this.stampCache.set(cacheKey, stampCanvas);
+  createNoisyPath(x, y, size) {
+    // Calculate number of dots based on size, flow, and scatter amount - ultra dense granular effect
+    const numDots = Math.floor(
+      size * 15.0 * this.flow * this.scatterAmountMultiplier
+    ); // Maximum density dots with scatter control
+    const dotRadius = Math.max(0.1, size * 0.005 * this.scatterSizeMultiplier); // Ultra tiny dots with scatter size control
+
+    this.ctx.save();
+    this.ctx.fillStyle = this.color;
+    this.ctx.globalAlpha = this.opacity;
+
+    for (let i = 0; i < numDots; i++) {
+      // Create uniform circular distribution (no center bias)
+      const scatterRadius = size * 0.4 * this.scatterRadiusMultiplier; // Apply scatter radius multiplier
+      const angle = Math.random() * Math.PI * 2; // Random angle
+      const distance = Math.sqrt(Math.random()) * scatterRadius; // Square root for uniform area distribution
+      const dotX = x + Math.cos(angle) * distance;
+      const dotY = y + Math.sin(angle) * distance;
+
+      // Ultra tiny random dot sizes for maximum granularity with scatter size control
+      const randomSize = dotRadius * (0.1 + Math.random() * 0.9);
+
+      // Draw individual dot
+      this.ctx.beginPath();
+      this.ctx.arc(dotX, dotY, randomSize, 0, Math.PI * 2);
+      this.ctx.fill();
     }
 
-    // Apply stamp with flow and opacity
-    this.ctx.globalAlpha = effectiveOpacity * this.flow;
-    this.ctx.drawImage(
-      stampCanvas,
-      x - effectiveSize / 2,
-      y - effectiveSize / 2
-    );
-
-    // Add additional random specks for more visible scatter effect
-    this.addRandomSpecks(x, y, effectiveSize);
-
-    this.ctx.globalAlpha = 1.0;
+    this.ctx.restore();
   }
 
   createStamp(size) {
@@ -486,161 +466,12 @@ class SprayPaint {
     this.ctx.globalAlpha = 1.0;
   }
 
-  updateDrips(x, y) {
-    if (!this.dripsEnabled) return;
-
-    // Convert to grid coordinates
-    const gridX = Math.floor(x / this.nozzleSize);
-    const gridY = Math.floor(y / this.nozzleSize);
-
-    // Ensure grid exists
-    if (!this.dripGrid) {
-      this.initializeDripGrid();
-    }
-
-    // Check bounds
-    if (
-      gridX >= 0 &&
-      gridX < this.dripGrid.length &&
-      gridY >= 0 &&
-      gridY < this.dripGrid[gridX].length
-    ) {
-      const drip = this.dripGrid[gridX][gridY];
-      drip.count += this.nozzleSize;
-
-      if (drip.count >= this.dripThreshold) {
-        drip.drips = true;
-        drip.width = this.nozzleSize;
-        this.dripAt(gridX, gridY, drip);
-      }
-    }
-  }
-
-  initializeDripGrid() {
-    const gridWidth = Math.ceil(this.canvas.width / this.nozzleSize);
-    const gridHeight = Math.ceil(this.canvas.height / this.nozzleSize);
-
-    this.dripGrid = [];
-    this.dripFunctions = [];
-
-    for (let x = 0; x < gridWidth; x++) {
-      this.dripGrid[x] = [];
-      for (let y = 0; y < gridHeight; y++) {
-        this.dripGrid[x][y] = {
-          count: 0,
-          drips: false,
-          width: 0,
-          dripSpeed: this.dripSpeed,
-        };
-      }
-    }
-  }
-
-  dripAt(gridX, gridY, initialDrip) {
-    const maxY = this.dripGrid[gridX].length - 1;
-    this.dripFunctions.push(
-      this.createDripFunctionFor(maxY, gridX, gridY, initialDrip)
-    );
-  }
-
-  createDripFunctionFor(maxY, gridX, gridY, myDrip) {
-    return (idx) => {
-      if (myDrip.count <= 0) {
-        myDrip.count = 0;
-        this.dripFunctions.splice(idx, 1);
-        return;
-      }
-
-      if (gridY < maxY) {
-        myDrip.dripSpeed = Math.max(1, myDrip.dripSpeed - myDrip.width);
-
-        if (myDrip.dripSpeed === 1) {
-          const deltaWidth = Math.floor(Math.random() * 3) - 1;
-          const deltaX = Math.floor(Math.random() * 3) - 1;
-
-          // Move drip to next step
-          const nextY = gridY + 1;
-          const otherDrip = this.dripGrid[gridX][nextY];
-
-          if (!otherDrip.drips) {
-            otherDrip.drips = true;
-            myDrip.count = myDrip.count - myDrip.width;
-          }
-
-          otherDrip.count += myDrip.count;
-          otherDrip.width = Math.max(
-            Math.max(1, myDrip.width + deltaWidth),
-            otherDrip.width
-          );
-
-          // Draw drip line
-          this.drawDripLine(
-            gridX * this.nozzleSize,
-            gridY * this.nozzleSize,
-            gridX * this.nozzleSize + deltaX,
-            nextY * this.nozzleSize,
-            myDrip.width
-          );
-
-          myDrip.count = 0;
-          myDrip = otherDrip;
-          gridY = nextY;
-        } else {
-          myDrip.count = myDrip.count + this.nozzleSize;
-        }
-
-        this.dripFunctions.splice(
-          idx,
-          1,
-          this.createDripFunctionFor(maxY, gridX, gridY, myDrip)
-        );
-      }
-    };
-  }
-
-  drawDripLine(x1, y1, x2, y2, width) {
-    this.ctx.save();
-    this.ctx.strokeStyle = this.color;
-    this.ctx.lineWidth = width;
-    this.ctx.lineCap = "round";
-    this.ctx.globalAlpha = 0.8;
-
-    this.ctx.beginPath();
-    this.ctx.moveTo(x1, y1);
-    this.ctx.lineTo(x2, y2);
-    this.ctx.stroke();
-    this.ctx.restore();
-  }
-
-  updateDripFunctions() {
-    if (!this.dripsEnabled || this.dripFunctions.length === 0) return;
-
-    // Update all active drip functions (reverse iteration for safe removal)
-    for (let i = this.dripFunctions.length - 1; i >= 0; i--) {
-      try {
-        this.dripFunctions[i](i);
-      } catch (error) {
-        // Remove invalid drip functions
-        this.dripFunctions.splice(i, 1);
-      }
-    }
-  }
-
   stopDrawing() {
     this.isDrawing = false;
-    this.dripAccumulator = 0;
-    // Clear drip functions when stopping
-    this.dripFunctions = [];
-
-    // Add final spray burst effect for natural end
-    this.addSprayBurst(this.currentX, this.currentY);
   }
 
   clear() {
     this.ctx.clearRect(0, 0, this.canvas.width, this.canvas.height);
-    this.dripFunctions = [];
-    this.dripGrid = null;
-    this.dripAccumulator = 0;
   }
 
   // Clean up cache periodically
@@ -653,28 +484,5 @@ class SprayPaint {
         this.stampCache.set(key, value);
       });
     }
-  }
-
-  addSprayBurst(x, y) {
-    const effectiveSize = this.nozzleSize * (0.8 + this.pressure * 0.4);
-    const burstRadius = effectiveSize * 0.5; // Smaller burst radius
-    const numBurstStamps = Math.floor(effectiveSize * 0.6); // Fewer burst stamps
-
-    // Create subtle circular burst pattern for natural spray start/end
-    for (let i = 0; i < numBurstStamps; i++) {
-      const angle = (i / numBurstStamps) * Math.PI * 2;
-      const distance = Math.random() * burstRadius;
-      const burstX = x + Math.cos(angle) * distance;
-      const burstY = y + Math.sin(angle) * distance;
-
-      // Add subtle randomness to the burst
-      const jitterX = (Math.random() - 0.5) * 2;
-      const jitterY = (Math.random() - 0.5) * 2;
-
-      this.stamp(burstX + jitterX, burstY + jitterY);
-    }
-
-    // Add center stamp for subtle density
-    this.stamp(x, y);
   }
 }

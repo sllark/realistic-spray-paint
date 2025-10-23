@@ -11,7 +11,6 @@ class SprayPaintApp {
     this.softnessSlider = null;
     this.opacitySlider = null;
     this.flowSlider = null;
-    this.dripsToggle = null;
     this.scatterRadiusSlider = null;
     this.scatterAmountSlider = null;
     this.scatterSizeSlider = null;
@@ -75,7 +74,6 @@ class SprayPaintApp {
     this.softnessSlider = document.getElementById("softnessSlider");
     this.opacitySlider = document.getElementById("opacitySlider");
     this.flowSlider = document.getElementById("flowSlider");
-    this.dripsToggle = document.getElementById("dripsToggle");
     this.scatterRadiusSlider = document.getElementById("scatterRadiusSlider");
     this.scatterAmountSlider = document.getElementById("scatterAmountSlider");
     this.scatterSizeSlider = document.getElementById("scatterSizeSlider");
@@ -130,11 +128,6 @@ class SprayPaintApp {
       const value = parseInt(e.target.value);
       this.sprayPaint.setFlow(value);
       this.flowValue.textContent = value + "%";
-    });
-
-    // Drips toggle
-    this.dripsToggle.addEventListener("change", (e) => {
-      this.sprayPaint.setDripsEnabled(e.target.checked);
     });
 
     // Scatter radius slider
@@ -200,8 +193,6 @@ class SprayPaintApp {
     // Space bar to toggle drips
     if (e.key === " ") {
       e.preventDefault();
-      this.dripsToggle.checked = !this.dripsToggle.checked;
-      this.sprayPaint.setDripsEnabled(this.dripsToggle.checked);
     }
 
     // 'M' key to toggle scatter controls visibility
@@ -234,7 +225,6 @@ class SprayPaintApp {
     this.sprayPaint.setSoftness(parseInt(this.softnessSlider.value));
     this.sprayPaint.setOpacity(parseInt(this.opacitySlider.value));
     this.sprayPaint.setFlow(parseInt(this.flowSlider.value));
-    this.sprayPaint.setDripsEnabled(this.dripsToggle.checked);
     this.sprayPaint.setScatterRadius(parseInt(this.scatterRadiusSlider.value));
     this.sprayPaint.setScatterAmount(parseInt(this.scatterAmountSlider.value));
     this.sprayPaint.setScatterSize(parseInt(this.scatterSizeSlider.value));
@@ -268,11 +258,6 @@ class SprayPaintApp {
     this.sprayPaint.setFlow(flow);
     this.flowSlider.value = flow;
     this.flowValue.textContent = flow + "%";
-  }
-
-  setDripsEnabled(enabled) {
-    this.sprayPaint.setDripsEnabled(enabled);
-    this.dripsToggle.checked = enabled;
   }
 
   clear() {
