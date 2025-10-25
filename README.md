@@ -1,6 +1,6 @@
 # Realistic Spray Paint Web App
 
-A high-performance, realistic spray paint simulator built with HTML5 Canvas and JavaScript. Features authentic spray paint physics with granular noisy path effects and dynamic mist.
+A high-performance, realistic spray paint simulator built with HTML5 Canvas and JavaScript. Features authentic spray paint physics with granular noisy path effects, dynamic mist, and advanced drip simulation.
 
 ## ✨ Features
 
@@ -14,28 +14,47 @@ A high-performance, realistic spray paint simulator built with HTML5 Canvas and 
 - **Random Airy Overspray** - Log-normal size distribution with radius-based opacity falloff and additive blending for realistic mist
 - **Circular Distribution** - Proper circular spray patterns instead of square
 - **Zero-Gap Drawing** - Smooth continuous lines at any speed
-- **Real-time Controls** - Adjust color, nozzle size, opacity, flow, scatter effects, and overspray
-- **60fps Performance** - Optimized for smooth real-time painting
+- **Advanced Drip Simulation** - Realistic paint drips with physics-based gravity, viscosity, and evaporation
+- **HiDPI Support** - Crisp rendering on high-resolution displays with device pixel ratio awareness
+- **Speed-Based Thickness** - Dynamic line thickness based on drawing speed for natural brush behavior
+- **Stationary Dwell Effects** - Time-based overspray emission when holding the brush in place
+- **Blue-Noise Scatter** - Golden-angle spiral distribution for natural, non-clumpy particle placement
+- **Real-time Controls** - Comprehensive control panel for all spray and drip parameters
+- **60fps Performance** - Optimized for smooth real-time painting with advanced caching
 
 ## 🎨 Controls
+
+### **Spray Paint Controls**
 
 | Control            | Range        | Default | Description                   |
 | ------------------ | ------------ | ------- | ----------------------------- |
 | **Color**          | Color picker | Black   | Choose spray paint color      |
-| **Nozzle Size**    | 2-120px      | 80px    | Spray width and intensity     |
+| **Nozzle Size**    | 2-120px      | 25px    | Spray width and intensity     |
 | **Softness**       | 70-95%       | 95%     | Edge softness of spray        |
 | **Opacity**        | 80-100%      | 100%    | Paint transparency            |
-| **Flow**           | 80-120%      | 110%    | Paint output rate             |
-| **Scatter Radius** | 100-200%     | 120%    | Mist spread distance          |
-| **Scatter Amount** | 20-100%      | 100%    | Mist particle density         |
-| **Scatter Size**   | 50-150%      | 150%    | Mist particle size            |
-| **Overspray**      | 0-100%       | 30%     | Excess paint beyond main area |
-| **Distance**       | 6-50px       | 12px    | Spray distance from surface   |
+| **Flow**           | 80-120%      | 100%    | Paint output rate             |
+| **Scatter Radius** | 100-200%     | 150%    | Mist spread distance          |
+| **Scatter Amount** | 20-100%      | 90%     | Mist particle density         |
+| **Scatter Size**   | 50-150%      | 100%    | Mist particle size            |
+| **Overspray**      | 0-100%       | 92%     | Excess paint beyond main area |
+| **Distance**       | 6-50px       | 10px    | Spray distance from surface   |
+
+### **Drip Simulation Controls**
+
+| Control              | Range     | Default | Description                         |
+| -------------------- | --------- | ------- | ----------------------------------- |
+| **Drip Threshold**   | 10-65%    | 55%     | Paint accumulation needed for drips |
+| **Drip Gravity**     | 500-3000  | 1580    | How fast drips fall                 |
+| **Drip Viscosity**   | 1.0-10.0  | 6.2     | Paint thickness/stickiness          |
+| **Drip Evaporation** | 0.05-0.50 | 0.40    | How quickly paint evaporates        |
+| **Toggle Drips**     | Button    | On      | Enable/disable drip simulation      |
 
 ## ⌨️ Keyboard Shortcuts
 
 - **1-9**: Quick nozzle size changes
 - **M**: Toggle scatter controls visibility
+- **D**: Toggle drip controls visibility
+- **Space**: Toggle drip simulation on/off
 - **Ctrl/Cmd + S**: Export as PNG
 - **Ctrl/Cmd + Z**: Clear canvas
 
@@ -60,21 +79,75 @@ A high-performance, realistic spray paint simulator built with HTML5 Canvas and 
    - Use the control panel to adjust settings
    - Experiment with different scatter effects
    - Multiple passes create solid coverage from noisy paths
+   - Hold the brush in place to create drips
+   - Adjust drip parameters for different paint behaviors
 
 ## 🛠️ Technical Details
 
-- **Canvas API** - High-performance 2D rendering
-- **Device Pixel Ratio** - Crisp graphics on all displays
+### **Core Rendering**
+
+- **Canvas API** - High-performance 2D rendering with HiDPI support
+- **Device Pixel Ratio** - Crisp graphics on all displays with automatic scaling
 - **Granular Dots** - Individual dot rendering for noisy path effect
 - **Brush Cache System** - Pre-rendered radial gradients with softness for realistic paint
+- **Quarter-Pixel Caching** - Smooth brush transitions with efficient memory usage
+
+### **Advanced Physics**
+
 - **Log-Normal Distribution** - Box-Muller transform for realistic grain variation
 - **Environmental Factors** - Distance and pressure affect grain size and opacity
 - **Alpha Saturation** - Distance-aware opacity with plateau behavior for realistic paint buildup
-- **Random Overspray System** - Log-normal size distribution, radius-based opacity falloff, and additive blending for realistic mist
-- **Nozzle Area Scaling** - Dot density proportional to nozzle diameter squared for realistic coverage
+- **Speed-Based Thickness** - Dynamic line thickness based on drawing speed
+- **Stationary Dwell Effects** - Time-based overspray emission when holding brush in place
+
+### **Drip Simulation**
+
+- **Physics-Based Drips** - Realistic gravity, viscosity, and evaporation
+- **Wetness Buffer** - 2D grid system for paint accumulation tracking
+- **Drip Merging** - Intelligent merging of nearby drips to prevent multiple hairlines
+- **Trail Rendering** - Dynamic trail width with cap-based limiting
+- **Performance Optimization** - Efficient drip update loop with configurable limits
+
+### **Particle Systems**
+
+- **Blue-Noise Scatter** - Golden-angle spiral distribution for natural particle placement
+- **Random Overspray System** - Log-normal size distribution with radius-based opacity falloff
+- **Nozzle Area Scaling** - Dot density proportional to nozzle diameter squared
 - **Circular Distribution** - Math.sqrt() for uniform circular spray patterns
 - **Scatter Controls** - Real-time adjustment of mist effects
-- **Performance Optimization** - 60fps with efficient dot rendering and brush caching
+
+### **Performance Features**
+
+- **60fps Optimization** - Efficient dot rendering and brush caching
+- **Memory Management** - Automatic cache cleanup and size limits
+- **Frame Rate Control** - Configurable update intervals for different performance needs
+- **Debug Logging** - Comprehensive logging system for drip behavior analysis
+
+## 💧 Drip Simulation
+
+The app features a sophisticated drip simulation system that creates realistic paint drips based on physics:
+
+### **How It Works**
+
+1. **Paint Accumulation** - As you spray, paint accumulates in a 2D buffer
+2. **Threshold Detection** - When enough paint pools in an area, a drip spawns
+3. **Physics Simulation** - Drips fall under gravity with realistic viscosity
+4. **Trail Rendering** - Each drip leaves a trail that widens as it falls
+5. **Evaporation** - Paint gradually evaporates over time
+
+### **Drip Controls**
+
+- **Threshold** - How much paint accumulation triggers drips
+- **Gravity** - How fast drips fall (higher = faster)
+- **Viscosity** - How thick/sticky the paint is (higher = thicker)
+- **Evaporation** - How quickly paint evaporates (higher = faster)
+
+### **Tips for Realistic Drips**
+
+- Hold the brush in one place to accumulate paint
+- Use higher flow and pressure for more paint accumulation
+- Adjust viscosity for different paint types (thick vs thin)
+- Lower evaporation for longer-lasting drips
 
 ## 📁 Project Structure
 
