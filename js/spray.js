@@ -225,16 +225,127 @@ class SprayPaint {
 
     // build radial gradient in DPR space
     const rr = r * dpr;
-    const grad = g.createRadialGradient(rr, rr, 0, rr, rr, rr);
-    grad.addColorStop(0, this.color);
-    grad.addColorStop(this.softness, this.color);
-    grad.addColorStop(1, this.color + "00");
 
-    g.fillStyle = grad;
-    g.fillRect(0, 0, c.width, c.height);
+    // Check if this is a gold color and apply metallic effect
+    if (this.isGoldColor(this.color)) {
+      this.createMetallicBrush(g, rr, r, dpr);
+    } else {
+      const grad = g.createRadialGradient(rr, rr, 0, rr, rr, rr);
+      grad.addColorStop(0, this.color);
+      grad.addColorStop(this.softness, this.color);
+      grad.addColorStop(1, this.color + "00");
+      g.fillStyle = grad;
+      g.fillRect(0, 0, c.width, c.height);
+    }
 
     this.stampCache.set(key, c);
     return c;
+  }
+
+  // Check if the color is gold (close to #EAC677)
+  isGoldColor(color) {
+    const goldHex = "#eac677";
+    const normalizedColor = color.toLowerCase();
+    return normalizedColor === goldHex || normalizedColor === "#eac677";
+  }
+
+  // Create metallic brush effect for gold color
+  createMetallicBrush(ctx, radius, baseRadius, dpr) {
+    const centerX = radius;
+    const centerY = radius;
+
+    // Create multiple overlapping gradients for metallic effect
+    const metallicGradients = [
+      // Base gold
+      {
+        gradient: ctx.createRadialGradient(
+          centerX,
+          centerY,
+          0,
+          centerX,
+          centerY,
+          radius
+        ),
+        stops: [
+          { pos: 0, color: "#FFD700" }, // Bright gold center
+          { pos: 0.3, color: "#EAC677" }, // Original gold
+          { pos: 0.7, color: "#D4AF37" }, // Darker gold
+          { pos: 1, color: "#B8860B" }, // Dark gold edge
+        ],
+      },
+      // Metallic highlight
+      {
+        gradient: ctx.createRadialGradient(
+          centerX * 0.7,
+          centerY * 0.7,
+          0,
+          centerX,
+          centerY,
+          radius * 0.6
+        ),
+        stops: [
+          { pos: 0, color: "#FFF8DC" }, // Light highlight
+          { pos: 0.4, color: "#FFD700" }, // Gold highlight
+          { pos: 1, color: "rgba(255, 215, 0, 0)" }, // Fade out
+        ],
+      },
+      // Secondary metallic reflection
+      {
+        gradient: ctx.createRadialGradient(
+          centerX * 1.2,
+          centerY * 0.8,
+          0,
+          centerX,
+          centerY,
+          radius * 0.4
+        ),
+        stops: [
+          { pos: 0, color: "rgba(255, 255, 255, 0.3)" }, // White highlight
+          { pos: 0.3, color: "rgba(255, 215, 0, 0.2)" }, // Gold reflection
+          { pos: 1, color: "rgba(255, 215, 0, 0)" }, // Fade out
+        ],
+      },
+    ];
+
+    // Apply each gradient layer
+    metallicGradients.forEach(({ gradient, stops }) => {
+      stops.forEach(({ pos, color }) => {
+        gradient.addColorStop(pos, color);
+      });
+
+      ctx.fillStyle = gradient;
+      ctx.fillRect(0, 0, ctx.canvas.width, ctx.canvas.height);
+    });
+
+    // Add subtle noise for metallic texture
+    this.addMetallicNoise(ctx, centerX, centerY, radius);
+  }
+
+  // Add metallic noise texture
+  addMetallicNoise(ctx, centerX, centerY, radius) {
+    const imageData = ctx.getImageData(
+      0,
+      0,
+      ctx.canvas.width,
+      ctx.canvas.height
+    );
+    const data = imageData.data;
+
+    for (let i = 0; i < data.length; i += 4) {
+      const x = (i / 4) % ctx.canvas.width;
+      const y = Math.floor(i / 4 / ctx.canvas.width);
+      const distance = Math.sqrt((x - centerX) ** 2 + (y - centerY) ** 2);
+
+      if (distance <= radius) {
+        // Add subtle metallic noise
+        const noise = (Math.random() - 0.5) * 20; // ±10 brightness variation
+        data[i] = Math.max(0, Math.min(255, data[i] + noise)); // Red
+        data[i + 1] = Math.max(0, Math.min(255, data[i + 1] + noise)); // Green
+        data[i + 2] = Math.max(0, Math.min(255, data[i + 2] + noise)); // Blue
+      }
+    }
+
+    ctx.putImageData(imageData, 0, 0);
   }
 
   deriveSprayParams() {
@@ -599,6 +710,14 @@ class SprayPaint {
       // Draw with HiDPI gradient brush at sub-pixel coordinates
       const b = this.getBrush(rndSize);
       this.ctx.globalAlpha = dotOpacity;
+
+      // Add metallic shimmer for gold particles
+      if (this.isGoldColor(this.color) && Math.random() < 0.3) {
+        this.ctx.globalCompositeOperation = "screen";
+        this.ctx.drawImage(b, dotX - rndSize, dotY - rndSize);
+        this.ctx.globalCompositeOperation = "source-over";
+      }
+
       this.ctx.drawImage(b, dotX - rndSize, dotY - rndSize);
 
       // accumulate wetness sparsely for performance (every 4th dot)
@@ -1230,10 +1349,18 @@ class SprayPaint {
         this._accumWet(xx, yy, alpha * 0.06);
       }
 
-      // head (unchanged, but keep log)
+      // head with enhanced metallic effect for gold
       const Rhead = this.headRadiusFor(d);
       ctx.globalAlpha = Math.min(0.22, 0.16 + 0.1 * d.vol);
-      ctx.drawImage(this.getBrush(Rhead), d.x - Rhead, d.y - Rhead);
+
+      // Apply enhanced metallic effect for gold drips
+      if (this.isGoldColor(this.color)) {
+        ctx.globalCompositeOperation = "screen";
+        ctx.drawImage(this.getBrush(Rhead), d.x - Rhead, d.y - Rhead);
+        ctx.globalCompositeOperation = "multiply";
+      } else {
+        ctx.drawImage(this.getBrush(Rhead), d.x - Rhead, d.y - Rhead);
+      }
 
       // life
       d.vol -=

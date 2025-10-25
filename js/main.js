@@ -21,6 +21,8 @@ class SprayPaintApp {
     this.dripViscositySlider = null;
     this.dripEvaporationSlider = null;
     this.dripToggleBtn = null;
+    this.goldColorBtn = null;
+    this.blackColorBtn = null;
     this.clearBtn = null;
     this.exportBtn = null;
 
@@ -102,6 +104,8 @@ class SprayPaintApp {
       "dripEvaporationSlider"
     );
     this.dripToggleBtn = document.getElementById("dripToggleBtn");
+    this.goldColorBtn = document.getElementById("goldColorBtn");
+    this.blackColorBtn = document.getElementById("blackColorBtn");
     this.clearBtn = document.getElementById("clearBtn");
     this.exportBtn = document.getElementById("exportBtn");
 
@@ -131,6 +135,7 @@ class SprayPaintApp {
     // Color picker
     this.colorPicker.addEventListener("input", (e) => {
       this.sprayPaint.setColor(e.target.value);
+      this.updateColorPresetButtons(e.target.value);
     });
 
     // Nozzle size slider
@@ -245,6 +250,17 @@ class SprayPaintApp {
       this.canvasDrawer.exportPNG();
     });
 
+    // Color preset buttons
+    this.goldColorBtn.addEventListener("click", () => {
+      this.setColor("#EAC677");
+      this.updateColorPresetButtons("#EAC677");
+    });
+
+    this.blackColorBtn.addEventListener("click", () => {
+      this.setColor("#221F20");
+      this.updateColorPresetButtons("#221F20");
+    });
+
     // Keyboard shortcuts
     document.addEventListener("keydown", (e) => {
       this.handleKeyboard(e);
@@ -356,6 +372,20 @@ class SprayPaintApp {
   setColor(color) {
     this.sprayPaint.setColor(color);
     this.colorPicker.value = color;
+    this.updateColorPresetButtons(color);
+  }
+
+  updateColorPresetButtons(currentColor) {
+    // Remove active class from all preset buttons
+    this.goldColorBtn.classList.remove("active");
+    this.blackColorBtn.classList.remove("active");
+
+    // Add active class to matching button
+    if (currentColor === "#EAC677") {
+      this.goldColorBtn.classList.add("active");
+    } else if (currentColor === "#221F20") {
+      this.blackColorBtn.classList.add("active");
+    }
   }
 
   setNozzleSize(size) {
