@@ -50,19 +50,19 @@ class SprayPaint {
     this.drips = [];
 
     // physics (seconds-based)
-    this.DRIP_THRESHOLD = 0.5; // pooled paint needed at center cell
-    this.DRIP_HYST = 0.085; // local drain after spawn
+    this.DRIP_THRESHOLD = 0.55; // pooled paint needed at center cell
+    this.DRIP_HYST = 0.12; // local drain after spawn
     this.GRAVITY = 1580; // px/s^2
-    this.VISCOSITY = 6.2; // s^-1 damping
-    this.WET_EVAP = 0.5; // s^-1 evaporation from buffer
-    this.W_CAP = 1.0; // per-cell wetness cap (keep only this line)
-    this.MAX_DRIPS = 120;
+    this.VISCOSITY = 4.2; // s^-1 damping
+    this.WET_EVAP = 0.26; // s^-1 evaporation from buffer
+    this.W_CAP = 0.9; // per-cell wetness cap (keep only this line)
+    this.MAX_DRIPS = 90;
 
     this._lastT = performance.now();
 
     // pooling / spacing / shape
-    this.NBR_MIN = 0.44; // min 3×3 pooled wetness
-    this.MIN_DRIP_SPACING = 18; // px — merges nearby seeds to thicken
+    this.NBR_MIN = 0.72; // min 3×3 pooled wetness
+    this.MIN_DRIP_SPACING = 22; // px — merges nearby seeds to thicken
     this.DEPOSIT_PER_PX = 1.25; // volume lost per 60–70 px of travel
     this.LATERAL_SPREAD = 0.6; // px/frame lateral meander
 
@@ -72,7 +72,7 @@ class SprayPaint {
 
     // dwell speed references
     this.V_REF = 160; // "normal hand" speed
-    this.V_SLOW = 80; // below this → dwell spreading
+    this.V_SLOW = 70; // below this → dwell spreading
 
     // spawn cooldown map
     this._spawnCooldown = new Uint16Array(this.paintBuf.length);
@@ -1034,6 +1034,8 @@ class SprayPaint {
     if (cx < 0 || cy < 0 || cx >= this.bufW || cy >= this.bufH) return;
     const idx = cy * this.bufW + cx;
     if (this._spawnCooldown[idx] > 0) return;
+    // hard speed gate: only allow spawns when really slow/lingering
+    if (speed > this.V_SLOW * 0.8) return;
 
     // pooled wetness in 3×3 with neighbor weight
     let pool = 0;
