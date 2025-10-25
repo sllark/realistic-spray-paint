@@ -79,6 +79,22 @@ class SprayPaint {
 
     // drip control
     this.dripsEnabled = true;
+
+    // --- radius safety & merge damping ---
+    this.GLOBAL_TRAIL_CAP = 26.0;   // absolute visual max for any trail stamp
+    this.R_BASE_HARD_MAX  = 12.0;   // baseR can't exceed this (prevents huge heads)
+    this.MERGE_DAMP       = 0.35;   // 0..1, how much to move toward area-conserving merge
+
+    // --- overspray timing ---
+    this._lastDwellOverAt = 0;      // ms
+    this._oversprayTimeStepMs = 70; // emit overspray ring ~14 Hz when stationary
+
+    // Speed→thickness dynamics
+    this.lineDynamicsEnabled = true;
+    this.thickSlowScale = 1.3; // max scale when very slow/holding
+    this.thinFastScale  = 0.7; // min scale when very fast
+    this.V_FAST = this.V_REF * 20; // speed at which thinning saturates
+    this.speedCurve = 1.3; // >1 = smoother, <1 = snappier
   }
 
   setColor(color) {
@@ -147,13 +163,43 @@ class SprayPaint {
     this.WET_EVAP = Math.max(0.05, Math.min(1.0, evaporation / 100));
   }
 
+  setLineDynamicsEnabled(on) { this.lineDynamicsEnabled = !!on; }
+  
+  setLineDynamicsRange(minScale, maxScale) {
+    this.thinFastScale = Math.max(0.4, Math.min(1.0, minScale));
+    this.thickSlowScale = Math.max(1.0, Math.min(2.0, maxScale));
+  }
+  setLineDynamicsCurve(curve = 1.25) { this.speedCurve = Math.max(0.5, Math.min(3, curve)); }
+  
+  setLineDynamicsFastSpeed(vfast) { this.V_FAST = Math.max(this.V_REF * 1.2, vfast); }
+
   toggleDrips() {
     // Toggle drip simulation by enabling/disabling drip spawning
     this.dripsEnabled = !this.dripsEnabled;
     return this.dripsEnabled;
   }
 
+  _getThicknessScale(speed) {
+    if (!this.lineDynamicsEnabled) return 1.0;
+  
+    // normalize speed between V_SLOW and V_FAST
+    const nRaw = (speed - this.V_SLOW) / Math.max(1, (this.V_FAST - this.V_SLOW));
+    const n = Math.max(0, Math.min(1, nRaw));
+    // ease-in curve for smoother response
+    const eased = Math.pow(n, this.speedCurve);
+  
+    // lerp: slow→thick, fast→thin
+    const minS = this.thinFastScale;   // at n=1 (fast)
+    const maxS = this.thickSlowScale;  // at n=0 (slow)
+    return maxS + (minS - maxS) * eased;
+  }
+
+  // --- 1) getBrush(radius) with large-radius warning ---
   getBrush(radius) {
+    if (radius > 64) {
+      console.warn(`getBrush large radius=${radius}`);
+    }
+
     const R = this._safeR(radius);
     const r = Math.round(R); // cache on integer radii
     const key = `${r}-${this.color}-${this.softness}`;
@@ -164,7 +210,6 @@ class SprayPaint {
     c.width = c.height = s;
     const g = c.getContext("2d");
 
-    // guard against any weird context state
     if (!g || !Number.isFinite(r)) return c;
 
     const grad = g.createRadialGradient(r, r, 0, r, r, r);
@@ -269,7 +314,16 @@ class SprayPaint {
     this.currentX = x;
     this.currentY = y;
     this.pressure = pressure;
-    this.lastOverPos = null; // reset overspray emitter
+    this.lastOverPos = null;
+
+    // Start continuous spraying
+    if (!this._sprayInterval) {
+      this._sprayInterval = setInterval(() => {
+        if (this.isDrawing) {
+          this.stamp(this.currentX, this.currentY);
+        }
+      }, 16); // ~60fps, adjust to 30–60fps range for performance
+    }
   }
 
   draw(x, y, pressure = 1.0) {
@@ -334,26 +388,10 @@ class SprayPaint {
     // Calculate optimal stamp density based on movement speed
     const speedRatio = distance / effectiveSize;
 
-    console.log(
-      `🔍 Gap Analysis: dist=${distance.toFixed(
-        1
-      )}, size=${effectiveSize.toFixed(1)}, speed=${speedRatio.toFixed(
-        2
-      )}, from=(${startX.toFixed(1)},${startY.toFixed(1)}) to=(${endX.toFixed(
-        1
-      )},${endY.toFixed(1)})`
-    );
-
     if (speedRatio > 1.5) {
       // Fast movement - use intelligent gap filling
       const gapSize = effectiveSize * 0.2;
       const numGaps = Math.floor(distance / gapSize);
-
-      console.log(
-        `⚡ Fast Movement: gapSize=${gapSize.toFixed(
-          1
-        )}, numGaps=${numGaps}, adding=${numGaps} stamps`
-      );
 
       // Fill gaps with systematic stamps
       for (let i = 0; i < numGaps; i++) {
@@ -365,12 +403,6 @@ class SprayPaint {
         const jitterX = (Math.random() - 0.5) * 2;
         const jitterY = (Math.random() - 0.5) * 2;
 
-        console.log(
-          `📍 Gap stamp ${i + 1}/${numGaps}: t=${t.toFixed(3)} pos=(${(
-            stampX + jitterX
-          ).toFixed(1)},${(stampY + jitterY).toFixed(1)})`
-        );
-
         this.stamp(stampX + jitterX, stampY + jitterY);
       }
     }
@@ -378,10 +410,6 @@ class SprayPaint {
     if (speedRatio > 3.0) {
       // Very fast movement - add extra coverage
       const extraDensity = Math.floor(speedRatio);
-
-      console.log(
-        `🚀 Very Fast: extraDensity=${extraDensity}, adding=${extraDensity} extra stamps`
-      );
 
       for (let i = 0; i < extraDensity; i++) {
         const t = Math.random();
@@ -391,12 +419,6 @@ class SprayPaint {
         const jitterX = (Math.random() - 0.5) * 3;
         const jitterY = (Math.random() - 0.5) * 3;
 
-        console.log(
-          `📍 Extra stamp ${i + 1}/${extraDensity}: t=${t.toFixed(3)} pos=(${(
-            stampX + jitterX
-          ).toFixed(1)},${(stampY + jitterY).toFixed(1)})`
-        );
-
         this.stamp(stampX + jitterX, stampY + jitterY);
       }
     }
@@ -404,10 +426,6 @@ class SprayPaint {
     if (speedRatio > 5.0) {
       // Extremely fast movement - maximum coverage
       const maxStamps = Math.floor(distance / (effectiveSize * 0.1));
-
-      console.log(
-        `💨 Ultra Fast: maxStamps=${maxStamps}, adding=${maxStamps} ultra stamps`
-      );
 
       for (let i = 0; i < maxStamps; i++) {
         const t = Math.random();
@@ -417,41 +435,59 @@ class SprayPaint {
         const jitterX = (Math.random() - 0.5) * 4;
         const jitterY = (Math.random() - 0.5) * 4;
 
-        console.log(
-          `📍 Ultra stamp ${i + 1}/${maxStamps}: t=${t.toFixed(3)} pos=(${(
-            stampX + jitterX
-          ).toFixed(1)},${(stampY + jitterY).toFixed(1)})`
-        );
-
         this.stamp(stampX + jitterX, stampY + jitterY);
       }
     }
 
     if (speedRatio <= 1.5) {
-      console.log(`🐌 Slow Movement - No extra stamps needed`);
+      // console.log(`🐌 Slow Movement - No extra stamps needed`);
     }
   }
+
 
   stamp(x, y) {
     const now = performance.now();
     const dx = x - (this.lastX ?? x);
     const dy = y - (this.lastY ?? y);
     const speed = this._updateSpeed(now, dx, dy);
-
+  
     if (now - this.lastStampTime < this.stampInterval) return;
     this.lastStampTime = now;
-
+  
     const size = this.nozzleSize * (0.8 + this.pressure * 0.4);
-
+  
+    // 🔹 NEW: stationary dwell behavior
+    const stationary = speed < this.V_SLOW * 0.3; // ~very slow/held in place
+    if (stationary) {
+      // Time-based overspray emission (distance doesn't advance)
+      if (now - (this._lastDwellOverAt || 0) >= this._oversprayTimeStepMs) {
+        this.addOverspray(x, y, size);
+        this._lastDwellOverAt = now;
+      }
+  
+      // Extra centered pooling so a drip can spawn
+      // (use centerBias=true and neutral speed to avoid "slow penalty")
+      const dwellWet = 0.10 * this.flow * (0.85 + 0.5 * this.pressure);
+      this._accumWet(x, y, dwellWet, this.V_SLOW, /*centerBias=*/true);
+      this._trySpawnDripAt(x, y, this.V_SLOW); // neutral thresholds
+    } else {
+      // reset dwell overspray timer when moving again
+      this._lastDwellOverAt = 0;
+    }
+  
     // draw grain (speed-aware)
     this.createNoisyPath(x, y, size, speed);
-
-    // overspray pacing (unchanged)
+  
+    // --- existing distance-based overspray pacing (keep yours) ---
     const dOver = !this.lastOverPos
       ? Infinity
       : Math.hypot(x - this.lastOverPos.x, y - this.lastOverPos.y);
-    if (!this.lastOverPos || dOver >= this.oversprayStep) {
-      if (dOver < this.oversprayStep * 1.2) this.addOverspray(x, y, size);
+  
+    const shouldEmitByDistance = !this.lastOverPos || dOver >= this.oversprayStep;
+    if (shouldEmitByDistance) {
+      if (this.lastOverPos && dOver < this.oversprayStep * 1.2) {
+        this.addOverspray(x, y, size);
+      }
       this.lastOverPos = { x, y };
     }
   }
@@ -461,22 +497,28 @@ class SprayPaint {
     const params = this.deriveSprayParams();
     const { scatterRadius } = params;
 
+    // dwell already computed below; add speed-based thickness scale
+    const thicknessK = this._getThicknessScale(speed);
+
     // dwell: spread footprint & reduce per-dot alpha when moving slowly
     const dwell = Math.min(1, speed / this.V_REF); // 0..1
-    const spread = 1 + 0.35 * (1 - dwell); // up to +35%
-    const displayRadius = Math.max(scatterRadius, size * 0.55) * spread;
+    const spread = 1 + 0.35 * (1 - dwell);
+
+    // ⬇️ scale the footprint radius by speed
+    const displayRadius = Math.max(scatterRadius, size * 0.55) * spread * thicknessK;
 
     // Dot count ∝ nozzle area (area factor)
-    const areaFactor =
-      (this.nozzleSize * this.nozzleSize) / (this.Dref * this.Dref);
-    const baseDots = 6.0 * areaFactor * this.flow; // tune 4–10
+    // Increase dots when thinner, decrease when thicker, so darkness stays balanced.
+    const areaFactor = (this.nozzleSize * this.nozzleSize) / (this.Dref * this.Dref);
+    const baseDots = 6.0 * areaFactor * this.flow;
+    const densityComp = 1 / Math.max(0.6, Math.min(1.6, thicknessK));
     const MAX_DOTS = 1400; // tune for your device
     const numDots = Math.min(
       MAX_DOTS,
-      Math.floor(displayRadius * baseDots * this.scatterAmountMultiplier)
+      Math.floor(displayRadius * baseDots * this.scatterAmountMultiplier * densityComp)
     );
-    const dotRadius = Math.max(0.1, size * 0.005 * this.scatterSizeMultiplier); // Ultra tiny dots with scatter size control
-
+    
+    const dotRadius = Math.max(0.1, size * 0.005 * this.scatterSizeMultiplier);
     this.ctx.save();
     this.ctx.fillStyle = this.color;
     this.ctx.globalAlpha = this.opacity;
@@ -535,7 +577,9 @@ class SprayPaint {
     const { Rz, alphaScale } = params; // alphaScale ~ (opacity*pressure)/(1+0.02 z^2)
 
     // physical halo radius, clamped so it doesn't explode
-    const haloR = Math.min(Math.max(size * 1.1, 2.0 * Rz), size * 2.2);
+    const speed = this.speedEMA || this.V_REF;
+    const haloK = this._getThicknessScale(speed);
+    const haloR = Math.min(Math.max(size * 1.1, 2.0 * Rz), size * 2.2) * haloK;
 
     // orientation
     const vx = this.currentX - this.lastX,
@@ -800,7 +844,11 @@ class SprayPaint {
 
   stopDrawing() {
     this.isDrawing = false;
-    this.lastOverPos = null; // reset on lift
+    this.lastOverPos = null;
+    if (this._sprayInterval) {
+      clearInterval(this._sprayInterval);
+      this._sprayInterval = null;
+    }
   }
 
   clear() {
@@ -831,7 +879,9 @@ class SprayPaint {
   }
 
   // accumulate wetness into the buffer (cheap)
-  _accumWet(x, y, amount, speed = this.V_REF) {
+
+  // accumulate wetness into the buffer (cheap)
+  _accumWet(x, y, amount, speed = this.V_REF, centerBias = false) {
     const idx = this.cellIndexFromXY(x, y);
     if (idx < 0) return;
 
@@ -844,12 +894,17 @@ class SprayPaint {
     const left = Math.max(0, 1 - wet / this.W_CAP);
     add *= left;
 
-    // if dwelling, spread most of the paint to neighbors
+    // 🔸 NEW: center-biased path (no lateral spreading)
+    if (centerBias) {
+      this.paintBuf[idx] += add;
+      return;
+    }
+
+    // (existing dwell-based lateral spread)
     const dwell = Math.min(1, speed / this.V_REF); // 0..1
     if (dwell < 0.8) {
       const side = add * (0.55 * (1 - dwell)); // up to 55% sideflow
-      const cx = (x / this.bufScale) | 0,
-        cy = (y / this.bufScale) | 0;
+      const cx = (x / this.bufScale) | 0, cy = (y / this.bufScale) | 0;
 
       const addTo = (ix, iy, v) => {
         if (ix < 0 || iy < 0 || ix >= this.bufW || iy >= this.bufH) return;
@@ -863,7 +918,6 @@ class SprayPaint {
       addTo(cx, cy - 1, side * 0.5);
       addTo(cx, cy + 1, side * 0.5);
 
-      // reduce what stays in the center more aggressively
       add *= 1 - 0.9 * (1 - dwell);
     }
 
@@ -881,6 +935,8 @@ class SprayPaint {
   }
 
   // called occasionally from spraying to attempt spawning a drip
+
+  // --- 3) _trySpawnDripAt(x,y,speed) with SPAWN / MERGE logs ---
   _trySpawnDripAt(x, y, speed = this.V_REF) {
     if (!this.dripsEnabled) return;
 
@@ -902,133 +958,161 @@ class SprayPaint {
         pool += w * (ox === 0 && oy === 0 ? 1.0 : 0.65);
       }
     }
-
     const centerWet = this.paintBuf[idx];
 
-    // tighter requirements when moving slowly (to fight dwell blobs)
-    const slowFactor =
-      speed < this.V_SLOW ? this.V_SLOW / Math.max(20, speed) : 1;
+    // tighter requirements when moving slowly
+    const slowFactor = speed < this.V_SLOW ? this.V_SLOW / Math.max(20, speed) : 1;
     const needCenter = this.DRIP_THRESHOLD * Math.min(1.5, slowFactor);
-    const needPool = this.NBR_MIN * Math.min(1.5, slowFactor);
+    const needPool   = this.NBR_MIN * Math.min(1.5, slowFactor);
     if (centerWet < needCenter || pool < needPool) return;
 
-    // merge with nearby drip to avoid multiple hairlines
+    // merge with nearby drip
     for (let j = this.drips.length - 1; j >= 0; j--) {
       const d = this.drips[j];
-      if (
-        Math.abs(d.x - x) < this.MIN_DRIP_SPACING &&
-        Math.abs(d.y - y) < this.MIN_DRIP_SPACING * 0.8
-      ) {
-        d.vol = Math.min(
-          2.4,
-          d.vol + 0.45 * (1 + (pool - this.DRIP_THRESHOLD))
-        );
-        d.baseR = Math.min(d.baseR + 0.35, d.baseR * 1.06);
-        this._spawnCooldown[idx] = 10;
-        return;
+      if (Math.abs(d.x - x) < this.MIN_DRIP_SPACING &&
+          Math.abs(d.y - y) < this.MIN_DRIP_SPACING * 0.8) {
+            const addVol = Math.min(0.45 * (1 + (pool - this.DRIP_THRESHOLD)), 1.2);
+            const addBaseR = Math.max(2.0, d.baseR * 0.92); // treat source as similar scale
+            this._mergeIntoDrip(d, addBaseR, addVol);
+            this._spawnCooldown[idx] = 10;
+            return;
       }
     }
 
-    // drain so repeats need more paint
+    // drain & capacity check
     this.paintBuf[idx] = Math.max(0, centerWet - this.DRIP_HYST);
     if (this.drips.length >= this.MAX_DRIPS) return;
 
     // thicker base + moderate volume
     const areaScore = Math.max(0, pool - this.DRIP_THRESHOLD);
-    const slowClamp =
-      speed < this.V_SLOW ? 0.75 + 0.25 * (speed / this.V_SLOW) : 1;
+    const slowClamp = speed < this.V_SLOW ? 0.75 + 0.25 * (speed / this.V_SLOW) : 1;
 
     const vol = Math.min(1.6 * slowClamp, 0.6 + 1.2 * areaScore);
     const baseR = Math.max(
       2.1,
-      (1.6 + 0.9 * Math.sqrt(areaScore + 0.01) + (this.nozzleSize / 48) * 0.7) *
-        slowClamp
+      (1.6 + 0.9 * Math.sqrt(areaScore + 0.01) + (this.nozzleSize / 48) * 0.7) * slowClamp
     );
 
     this.drips.push({
-      x,
-      y,
-      px: x,
-      py: y,
-      vy: 0,
-      vol,
-      baseR,
-      len: 0,
-      life: 1.0,
+      x, y, px: x, py: y, vy: 0,
+      vol, baseR, len: 0, life: 1.0,
     });
     this._spawnCooldown[idx] = 10;
+
+    console.log(
+      `SPAWN id=${this.drips.length - 1} @(${x.toFixed(1)},${y.toFixed(1)}) baseR=${baseR.toFixed(2)} vol=${vol.toFixed(2)} pool=${areaScore.toFixed(2)}`
+    );
   }
 
   // time-based update for drips (call every frame)
+
+  // --- 4) _updateDrips(dt) with TRAIL/HEAD/cap & frame max logs ---
   _updateDrips(dt) {
     if (!this.drips.length) return;
-
+  
     const ctx = this.ctx;
     const prevOp = ctx.globalCompositeOperation;
     ctx.globalCompositeOperation = "multiply";
-
+  
+    let maxTrailSeen = 0;
+  
     for (let i = this.drips.length - 1; i >= 0; i--) {
       const d = this.drips[i];
-
+  
       // motion
       d.vy += this.GRAVITY * dt * (0.55 + 0.45 * d.vol);
       d.vy *= Math.exp(-this.VISCOSITY * dt);
       d.py = d.y;
       d.y += d.vy * dt;
-
+  
       // small lateral meander
       d.x += (Math.random() - 0.5) * this.LATERAL_SPREAD * (0.6 + 0.6 * d.vol);
-
+  
       const dy = d.y - d.py;
       d.len += Math.abs(dy);
-
-      // trail: fewer stamps, wider radius, lower alpha
+  
+      // trail stamps
       const stepPx = 1.0;
       const steps = Math.max(1, Math.floor(Math.abs(dy) / stepPx));
       const aBase = 0.22 * d.vol;
-
+  
       for (let s = 1; s <= steps; s++) {
         const t = s / steps;
         const yy = d.py + dy * t;
-
-        const widen = 1.0 + 0.003 * d.len;
-        const Rbase = Math.min(
-          d.baseR * (1.1 + 0.7 * d.vol) * widen,
-          d.baseR * 2.4
-        );
-        const R = this._safeR(Rbase * (1.0 + 0.15 * t)); // slightly wider near head
-
+  
+        // 🔧 shrink growth with length a bit; clamp max spread
+        const widen = Math.min(1.12, 1.0 + 0.0015 * d.len);
+  
+        const capR = this.trailCapFor(d);
+        const rawR = d.baseR * (1.08 + 0.60 * d.vol) * Math.min(1.12, 1.0 + 0.0015 * d.len) * (1.0 + 0.10 * t);
+        
+        // ease down if we overshoot cap (prevents flat-topped disks)
+        let drawR = rawR;
+        if (rawR >= capR) {
+          const overshoot = Math.min(1.0, (rawR - capR) / Math.max(1e-3, capR));
+          drawR = capR - (capR * 0.12) * overshoot * overshoot * (2 - overshoot); // cubic ease
+          drawR = Math.min(drawR, capR - 0.25); // tiny cushion below cap
+        }
+        const R = this._safeR(drawR);
+        
+        if (s === 1) {
+          console.log(`TRAIL-START id=${i} baseR=${d.baseR.toFixed(2)} vol=${d.vol.toFixed(2)} len=${d.len.toFixed(1)}`);
+          console.log(`TRAIL rawR=${rawR.toFixed(2)} capR=${capR.toFixed(2)} len=${d.len.toFixed(1)}`);
+        }
+        if (s === steps) {
+          console.log(`TRAIL rawR=${rawR.toFixed(2)} capR=${capR.toFixed(2)} len=${d.len.toFixed(1)}`);
+        }
+        console.log(`TRAIL drawR=${R.toFixed(2)} (t=${t.toFixed(2)})`);
+        if (R >= capR - 0.3) console.warn(`NEAR-CAP id=${i} drawR=${R.toFixed(2)} capR=${capR.toFixed(2)}`);
+  
+        if (s === 1) {
+          console.log(
+            `TRAIL-START id=${i} baseR=${d.baseR.toFixed(2)} vol=${d.vol.toFixed(2)} len=${d.len.toFixed(1)}`
+          );
+          console.log(`TRAIL rawR=${rawR.toFixed(2)} capR=${capR.toFixed(2)} len=${d.len.toFixed(1)}`);
+        }
+        if (s === steps) {
+          console.log(`TRAIL rawR=${rawR.toFixed(2)} capR=${capR.toFixed(2)} len=${d.len.toFixed(1)}`);
+        }
+        console.log(`TRAIL drawR=${R.toFixed(2)} (t=${t.toFixed(2)})`);
+  
+        if (R > maxTrailSeen) maxTrailSeen = R;
+  
         const xx = d.x + (Math.random() - 0.5) * 0.5 * R;
-        const alpha = Math.max(0.05, Math.min(0.2, aBase * (0.7 + 0.5 * t)));
-
+  
+        // 🔧 alpha falloff as R approaches cap (prevents cloudy disks)
+        const nearCap = R / Math.max(1e-3, capR);
+        const falloff = Math.max(0.35, 1 - 0.65 * nearCap * nearCap); // 1 → 0.35 near cap
+        const alpha = Math.max(0.05, Math.min(0.2, aBase * (0.7 + 0.5 * t) * falloff));
+  
         ctx.globalAlpha = alpha;
         ctx.drawImage(this.getBrush(R), xx - R, yy - R);
-
+  
         this._accumWet(xx, yy, alpha * 0.06);
       }
-
-      // softer, not huge head
-      {
-        let Rhead = this._safeR(
-          Math.min(d.baseR * (1.3 + 0.6 * d.vol), d.baseR * 2.2)
-        );
-        ctx.globalAlpha = Math.min(0.22, 0.16 + 0.12 * d.vol);
-        ctx.drawImage(this.getBrush(Rhead), d.x - Rhead, d.y - Rhead);
-      }
-
-      // end much sooner
-      d.vol -=
-        (this.DEPOSIT_PER_PX * Math.abs(dy)) / 60 + this.WET_EVAP * dt * 0.45;
+  
+      // head (unchanged, but keep log)
+      const Rhead = this.headRadiusFor(d);
+      ctx.globalAlpha = Math.min(0.22, 0.16 + 0.10 * d.vol);
+      ctx.drawImage(this.getBrush(Rhead), d.x - Rhead, d.y - Rhead);
+  
+      // life
+      d.vol -= (this.DEPOSIT_PER_PX * Math.abs(dy)) / 60 + this.WET_EVAP * dt * 0.45;
       if (d.vol <= 0.06 || d.len > 70 || d.y > this.canvas.height + 5) {
         this.drips.splice(i, 1);
       }
     }
-
+  
+    if (maxTrailSeen > 20) {
+      console.log(`FRAME maxTrailR=${maxTrailSeen.toFixed(2)}`);
+    }
+  
     ctx.globalCompositeOperation = prevOp;
   }
 
   // game loop hook — call once after constructing the tool
   startDripLoop() {
+    console.log(`🚀 Starting drip simulation loop`);
     const tick = (t) => {
       const dt = Math.min(0.05, (t - this._lastT) / 1000); // seconds, clamp 50ms
       this._lastT = t;
@@ -1046,11 +1130,57 @@ class SprayPaint {
     requestAnimationFrame(tick);
   }
 
-  // --- numeric guard ---
+  // --- 2) _safeR(r) with abnormal input warning ---
   _safeR(r) {
-    if (!Number.isFinite(r)) return 1; // fallback
-    return Math.max(1, Math.min(256, r)); // floor 1px so it's actually visible
+    if (!Number.isFinite(r) || r > 256) {
+      console.warn(`_safeR abnormal input r=${r}`);
+    }
+    return Math.max(1, Math.min(256, Number.isFinite(r) ? r : 1));
   }
+  
+  trailCapFor(d) {
+    const byBase = d.baseR * 1.6;                 // gentler than 2.4
+    const byVol  = 6.0 + 7.5 * Math.sqrt(d.vol);  // grows slowly with vol
+    const cap = Math.min(byBase, byVol, this.GLOBAL_TRAIL_CAP);
+    if (cap < d.baseR) {
+      console.warn(`CAP-LOWERED id? baseR=${d.baseR.toFixed(2)} cap=${cap.toFixed(2)}`);
+    }
+    return cap;
+  }
+
+  headRadiusFor(d) {
+    const raw = d.baseR * (1.15 + 0.45 * d.vol);
+    const cap = Math.min(this.trailCapFor(d) * 0.9, this.GLOBAL_TRAIL_CAP * 0.9);
+    const R = Math.max(1.0, Math.min(raw, cap));
+    console.log(`HEAD id=? Rhead=${R.toFixed(2)} baseR=${d.baseR.toFixed(2)} vol=${d.vol.toFixed(2)}`);
+    return R;
+  }
+
+  _mergeIntoDrip(target, addBaseR, addVol) {
+    const oldBase = target.baseR, oldVol = target.vol;
+  
+    const vol = Math.min(oldVol + addVol, 2.40); // keep your existing 2.4 cap
+    const areaMass =
+      (oldBase * oldBase) * oldVol +
+      (addBaseR * addBaseR) * addVol;
+  
+    const rEff = Math.sqrt(Math.max(1e-6, areaMass / Math.max(1e-6, vol)));
+    const rAvg = 0.5 * (oldBase + addBaseR);
+    let newBase = rAvg + this.MERGE_DAMP * (rEff - rAvg);
+  
+    if (newBase > this.R_BASE_HARD_MAX) {
+      console.warn(`MERGE-CLAMP baseR ${newBase.toFixed(2)} → ${this.R_BASE_HARD_MAX.toFixed(2)}`);
+      newBase = this.R_BASE_HARD_MAX;
+    }
+  
+    target.vol = vol;
+    target.baseR = newBase;
+  
+    console.log(
+      `MERGE into id=? newVol=${vol.toFixed(2)} newBaseR=${newBase.toFixed(2)} (from base=${oldBase.toFixed(2)}, vol=${oldVol.toFixed(2)} + ${addVol.toFixed(2)})`
+    );
+  }
+
   // Clean up cache periodically
   cleanupCache() {
     if (this.stampCache.size > 50) {
