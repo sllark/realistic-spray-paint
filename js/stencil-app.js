@@ -16,7 +16,7 @@ class StencilApp {
     this.dragStart = null;
     this.interactionMode = null; // 'move' | 'scale' | 'rotate'
     this.gesture = null; // gesture state for transforms
-    this.clipToStencil = true; // when true, cleanup outside; when false, keep overspray
+    this.clipToStencil = false; // when true, cleanup outside; when false, keep overspray
     this._stageCanvases = []; // for cursor updates
     this._rotateCursorUrl = null; // cached custom cursor for rotate
     this._compositeLoopRunning = false;
@@ -324,7 +324,7 @@ class StencilApp {
     // Make sure drips are enabled by default
     this.spray.dripsEnabled = true;
     // Slightly more permissive defaults to see drips easier
-    this.spray.setDripThreshold(55);
+    this.spray.setDripThreshold(59);
     this.spray.setFlow(120);
   }
 
@@ -349,10 +349,10 @@ class StencilApp {
         s.setScatterSize(Math.round((old.scatterSizeMultiplier || 1.5) * 100));
         s.setOverspray(Math.round((old.oversprayMultiplier || 1.0) * 100));
         s.setDistance(old.distance || 6);
-        s.setDripThreshold(Math.round((old.DRIP_THRESHOLD || 0.55) * 100));
-        s.setDripGravity(old.GRAVITY || 1580);
-        s.setDripViscosity(old.VISCOSITY || 4.2);
-        s.setDripEvaporation(Math.round((old.WET_EVAP || 0.26) * 100));
+        s.setDripThreshold(Math.round((old.DRIP_THRESHOLD || 0.59) * 100));
+        s.setDripGravity(old.GRAVITY || 500);
+        s.setDripViscosity(old.VISCOSITY || 8.9);
+        s.setDripEvaporation(Math.round((old.WET_EVAP || 0.18) * 100));
         s.dripsEnabled = old.dripsEnabled !== false;
       } catch (_) {}
     }
