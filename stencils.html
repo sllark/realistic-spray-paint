@@ -1,0 +1,350 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Spray + Stencils</title>
+    <link rel="stylesheet" href="styles.css" />
+    <style>
+      /* Mobile-first additions for stencil page */
+      :root {
+        --bg: #e4e1ce;
+      }
+      body.stencils {
+        background: var(--bg);
+        margin: 0;
+      }
+      #stencilApp {
+        display: flex;
+        flex-direction: column;
+        min-height: 100vh;
+      }
+      .tray {
+        display: flex;
+        gap: 12px;
+        padding: 10px;
+        overflow-x: auto;
+        background: rgba(255, 255, 255, 0.6);
+        backdrop-filter: blur(6px);
+        border-bottom: 1px solid #ddd;
+      }
+      .stencil-chip {
+        flex: 0 0 auto;
+        padding: 8px 12px;
+        border-radius: 18px;
+        background: #222;
+        color: #fff;
+        font-size: 14px;
+        user-select: none;
+        touch-action: none;
+      }
+      .stage {
+        position: relative;
+        flex: 1;
+      }
+      canvas.stage-layer {
+        position: absolute;
+        inset: 0;
+        width: 100%;
+        height: 100%;
+        touch-action: none;
+      }
+      .hud {
+        position: absolute;
+        right: 8px;
+        bottom: 8px;
+        display: flex;
+        gap: 8px;
+      }
+      .hud button {
+        padding: 8px 10px;
+        border-radius: 10px;
+        border: 1px solid #ccc;
+        background: #fff;
+        color: #000;
+      }
+      @media (min-width: 768px) {
+        .stencil-chip {
+          font-size: 15px;
+        }
+      }
+
+      /* Accordion styles */
+      .control-header {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        padding: 12px 16px;
+        background: rgba(255, 255, 255, 0.1);
+        cursor: pointer;
+        user-select: none;
+        border-bottom: 1px solid rgba(255, 255, 255, 0.2);
+      }
+
+      .control-header h3 {
+        margin: 0;
+        color: white;
+        font-size: 16px;
+        font-weight: 600;
+      }
+
+      .toggle-icon {
+        color: white;
+        font-size: 14px;
+        transition: transform 0.3s ease;
+      }
+
+      .control-content {
+        max-height: 0;
+        overflow: hidden;
+        transition: max-height 0.3s ease;
+        margin-top: 20px;
+      }
+
+      .control-content.expanded {
+        max-height: 1000px;
+      }
+
+      .control-header.collapsed .toggle-icon {
+        transform: rotate(-90deg);
+      }
+    </style>
+  </head>
+  <body class="stencils">
+    <div id="stencilApp">
+      <div class="tray" id="stencilTray" style="display: none"></div>
+      <div class="stage">
+        <!-- Layers: guide > stroke > paint -->
+        <canvas id="paintCanvas" class="stage-layer"></canvas>
+        <canvas id="strokeCanvas" class="stage-layer"></canvas>
+        <canvas id="guideCanvas" class="stage-layer"></canvas>
+      </div>
+      <!-- Controls Panel (copied from index.html) -->
+      <div id="controls" style="background: rgba(0, 0, 0, 0.85)">
+        <div class="control-header" onclick="toggleControls()">
+          <h3>Spray Controls</h3>
+          <div class="toggle-icon">▼</div>
+        </div>
+        <div class="control-content" id="controlContent">
+          <div class="control-group">
+            <label>Preset Colors:</label>
+            <div class="color-presets">
+              <button
+                id="blackColorBtn"
+                class="color-preset-btn active"
+                style="background-color: #221f20"
+                title="Black"
+              ></button>
+
+              <button
+                id="goldColorBtn"
+                class="color-preset-btn"
+                style="background-color: #eac677"
+                title="Gold"
+              ></button>
+            </div>
+          </div>
+
+          <div class="control-group">
+            <label for="nozzleSlider">Nozzle Size:</label>
+            <input
+              type="range"
+              id="nozzleSlider"
+              min="2"
+              max="120"
+              value="25"
+            />
+            <span id="nozzleValue">25</span>
+          </div>
+
+          <div class="control-group">
+            <label for="softnessSlider">Softness:</label>
+            <input
+              type="range"
+              id="softnessSlider"
+              min="70"
+              max="95"
+              value="95"
+            />
+            <span id="softnessValue">95%</span>
+          </div>
+
+          <div class="control-group">
+            <label for="opacitySlider">Opacity:</label>
+            <input
+              type="range"
+              id="opacitySlider"
+              min="80"
+              max="100"
+              value="100"
+            />
+            <span id="opacityValue">100%</span>
+          </div>
+
+          <div class="control-group">
+            <label for="flowSlider">Flow:</label>
+            <input
+              type="range"
+              id="flowSlider"
+              min="80"
+              max="120"
+              value="120"
+            />
+            <span id="flowValue">120%</span>
+          </div>
+
+          <div class="control-group">
+            <label for="scatterRadiusSlider">Scatter Radius:</label>
+            <input
+              type="range"
+              id="scatterRadiusSlider"
+              min="100"
+              max="200"
+              value="200"
+            />
+            <span id="scatterRadiusValue">200%</span>
+          </div>
+
+          <div class="control-group">
+            <label for="scatterAmountSlider">Scatter Amount:</label>
+            <input
+              type="range"
+              id="scatterAmountSlider"
+              min="20"
+              max="100"
+              value="100"
+            />
+            <span id="scatterAmountValue">100%</span>
+          </div>
+
+          <div class="control-group">
+            <label for="scatterSizeSlider">Scatter Size:</label>
+            <input
+              type="range"
+              id="scatterSizeSlider"
+              min="50"
+              max="150"
+              value="150"
+            />
+            <span id="scatterSizeValue">150%</span>
+          </div>
+
+          <div class="control-group">
+            <label for="overspraySlider">Overspray:</label>
+            <input
+              type="range"
+              id="overspraySlider"
+              min="0"
+              max="100"
+              value="100"
+            />
+            <span id="oversprayValue">100%</span>
+          </div>
+
+          <div class="control-group">
+            <label for="distanceSlider">Distance:</label>
+            <input
+              type="range"
+              id="distanceSlider"
+              min="6"
+              max="50"
+              value="6"
+            />
+            <span id="distanceValue">6px</span>
+          </div>
+
+          <div class="control-group">
+            <label for="dripThresholdSlider">Drip Threshold:</label>
+            <input
+              type="range"
+              id="dripThresholdSlider"
+              min="10"
+              max="65"
+              value="55"
+            />
+            <span id="dripThresholdValue">55%</span>
+          </div>
+
+          <div class="control-group">
+            <label for="dripGravitySlider">Drip Gravity:</label>
+            <input
+              type="range"
+              id="dripGravitySlider"
+              min="500"
+              max="3000"
+              value="1580"
+            />
+            <span id="dripGravityValue">1580</span>
+          </div>
+
+          <div class="control-group">
+            <label for="dripViscositySlider">Drip Viscosity:</label>
+            <input
+              type="range"
+              id="dripViscositySlider"
+              min="1"
+              max="10"
+              value="4.2"
+              step="0.1"
+            />
+            <span id="dripViscosityValue">4.2</span>
+          </div>
+
+          <div class="control-group">
+            <label for="dripEvaporationSlider">Drip Evaporation:</label>
+            <input
+              type="range"
+              id="dripEvaporationSlider"
+              min="5"
+              max="50"
+              value="26"
+              step="0.1"
+            />
+            <span id="dripEvaporationValue">0.26</span>
+          </div>
+
+          <div class="control-group">
+            <button id="dripToggleBtn">Toggle Drips</button>
+          </div>
+
+          <div class="control-group">
+            <button id="clearBtn">Clear</button>
+            <button id="exportBtn">Export PNG</button>
+          </div>
+          <div class="control-group">
+            <button
+              id="clipToggle"
+              title="Toggle clipping to selected stencil(s)"
+            >
+              Clip: On
+            </button>
+          </div>
+        </div>
+      </div>
+      <div class="hud"></div>
+    </div>
+
+    <script src="js/spray.js"></script>
+    <script src="js/stencil-app.js"></script>
+    <script>
+      function toggleControls() {
+        const content = document.getElementById("controlContent");
+        const header = document.querySelector(".control-header");
+
+        if (content.classList.contains("expanded")) {
+          content.classList.remove("expanded");
+          header.classList.add("collapsed");
+        } else {
+          content.classList.add("expanded");
+          header.classList.remove("collapsed");
+        }
+      }
+
+      // Initialize accordion as collapsed
+      document.addEventListener("DOMContentLoaded", function () {
+        const header = document.querySelector(".control-header");
+        header.classList.add("collapsed");
+      });
+    </script>
+  </body>
+</html>
