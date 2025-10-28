@@ -50,18 +50,18 @@ class SprayPaint {
     this.drips = [];
 
     // physics (seconds-based)
-    this.DRIP_THRESHOLD = 0.55; // pooled paint needed at center cell
-    this.DRIP_HYST = 0.12; // local drain after spawn
-    this.GRAVITY = 1580; // px/s^2
-    this.VISCOSITY = 4.2; // s^-1 damping
-    this.WET_EVAP = 0.26; // s^-1 evaporation from buffer
+    this.DRIP_THRESHOLD = 0.59; // pooled paint needed at center cell
+    this.DRIP_HYST = 0.16; // local drain after spawn
+    this.GRAVITY = 500; // px/s^2
+    this.VISCOSITY = 8.9; // s^-1 damping
+    this.WET_EVAP = 0.18; // s^-1 evaporation from buffer
     this.W_CAP = 0.9; // per-cell wetness cap (keep only this line)
     this.MAX_DRIPS = 90;
 
     this._lastT = performance.now();
 
     // pooling / spacing / shape
-    this.NBR_MIN = 0.72; // min 3×3 pooled wetness
+    this.NBR_MIN = 0.78; // min 3×3 pooled wetness
     this.MIN_DRIP_SPACING = 22; // px — merges nearby seeds to thicken
     this.DEPOSIT_PER_PX = 1.25; // volume lost per 60–70 px of travel
     this.LATERAL_SPREAD = 0.6; // px/frame lateral meander
@@ -79,6 +79,10 @@ class SprayPaint {
 
     // drip control
     this.dripsEnabled = true;
+
+    // dwell pacing
+    this._lastDwellWetAt = 0; // NEW: timestamp for dwell-wet pacing
+    this._dwellWetStepMs = 70; // NEW: add dwell wetness ~14 Hz max
 
     // --- radius safety & merge damping ---
     this.GLOBAL_TRAIL_CAP = 26.0; // absolute visual max for any trail stamp
@@ -108,11 +112,11 @@ class SprayPaint {
     this.TAIL_CAP_STEPS = 7; // how many stamps to round the tip when a drip ends
 
     // per-location spawn throttling (ms); avoid multiple instant drips
-    this.MIN_SPAWN_INTERVAL_MS = 1000; // ~0.55s
+    this.MIN_SPAWN_INTERVAL_MS = 1300; // ~0.55s
     this._lastSpawnAt = new Uint32Array(this.paintBuf.length); // per-cell timestamp (ms)
 
     // optional: longer cell cooldown after a spawn (frames, decremented in loop)
-    this.SPAWN_COOLDOWN_FRAMES = 40; // ~0.6s @ ~60fps
+    this.SPAWN_COOLDOWN_FRAMES = 70; // ~0.6s @ ~60fps
 
     // --- extra randomness for drip shapes ---
     this.SHAPE_NOISE_AMP = 0.22; // 0..0.3 — how wobbly the radius gets along the trail
@@ -605,9 +609,14 @@ class SprayPaint {
 
       // Extra centered pooling so a drip can spawn
       // (use centerBias=true and neutral speed to avoid "slow penalty")
-      const dwellWet = 0.1 * this.flow * (0.85 + 0.5 * this.pressure);
-      this._accumWet(x, y, dwellWet, this.V_SLOW, /*centerBias=*/ true);
-      this._trySpawnDripAt(x, y, this.V_SLOW); // neutral thresholds
+      // Extra centered pooling so a drip can spawn — paced in time
+      const nowMs = now;
+      if (nowMs - (this._lastDwellWetAt || 0) >= this._dwellWetStepMs) {
+        const dwellWet = 0.045 * this.flow * (0.85 + 0.5 * this.pressure); // was 0.06
+        this._accumWet(x, y, dwellWet, this.V_SLOW, /*centerBias=*/ true);
+        this._lastDwellWetAt = nowMs;
+      }
+      this._trySpawnDripAt(x, y, this.V_SLOW);
     } else {
       // reset dwell overspray timer when moving again
       this._lastDwellOverAt = 0;
@@ -739,10 +748,10 @@ class SprayPaint {
       this.ctx.drawImage(b, dotX - rndSize, dotY - rndSize);
 
       // accumulate wetness sparsely for performance (every 4th dot)
-      if ((i & 3) === 0) {
+      if (i % 5 === 0) {
         // scale wetness by size^2 and opacity, normalized by nozzle area
         const normNozzleArea = Math.max(64, this.nozzleSize * this.nozzleSize);
-        const G = 100;
+        const G = 60;
         const wet =
           ((G * dotOpacity * (rndSize * rndSize)) / normNozzleArea) *
           (0.8 + 0.6 * this.pressure) *
@@ -1110,42 +1119,43 @@ class SprayPaint {
     const idx = this.cellIndexFromXY(x, y);
     if (idx < 0) return;
 
-    // gentler gain overall
-    const gain = (0.85 + 0.45 * this.flow) * (0.75 + 0.55 * this.pressure);
+    // slightly less aggressive overall
+    const gain = (0.8 + 0.4 * this.flow) * (0.7 + 0.5 * this.pressure);
     let add = amount * gain;
 
-    // cap growth at the cell so it can't snowball
+    // per-cell cap pressure
     const wet = this.paintBuf[idx];
     const left = Math.max(0, 1 - wet / this.W_CAP);
     add *= left;
 
-    // 🔸 NEW: center-biased path (no lateral spreading)
     if (centerBias) {
+      // center hit: keep all here (tiny micro-spread is handled by overspray dots)
       this.paintBuf[idx] += add;
       return;
     }
 
-    // (existing dwell-based lateral spread)
-    const dwell = Math.min(1, speed / this.V_REF); // 0..1
-    if (dwell < 0.8) {
-      const side = add * (0.55 * (1 - dwell)); // up to 55% sideflow
-      const cx = (x / this.bufScale) | 0,
-        cy = (y / this.bufScale) | 0;
+    // For non-center accumulation, gently bias wetness to the center cell and reduce side spread.
+    const cx = (x / this.bufScale) | 0,
+      cy = (y / this.bufScale) | 0;
 
-      const addTo = (ix, iy, v) => {
-        if (ix < 0 || iy < 0 || ix >= this.bufW || iy >= this.bufH) return;
-        const k = iy * this.bufW + ix;
-        const rem = Math.max(0, 1 - this.paintBuf[k] / this.W_CAP);
-        this.paintBuf[k] += v * rem;
-      };
+    const addTo = (ix, iy, v) => {
+      if (ix < 0 || iy < 0 || ix >= this.bufW || iy >= this.bufH) return;
+      const k = iy * this.bufW + ix;
+      const rem = Math.max(0, 1 - this.paintBuf[k] / this.W_CAP);
+      this.paintBuf[k] += v * rem;
+    };
 
-      addTo(cx - 1, cy, side * 0.5);
-      addTo(cx + 1, cy, side * 0.5);
-      addTo(cx, cy - 1, side * 0.5);
-      addTo(cx, cy + 1, side * 0.5);
+    // dwell factor
+    const dwell = Math.min(1, speed / this.V_REF);
 
-      add *= 1 - 0.9 * (1 - dwell);
-    }
+    // keep most at center, faintly to neighbors
+    const side = add * (0.35 * (1 - dwell)); // was 0.55
+    add *= 1 - 0.7 * (1 - dwell); // was 0.9
+
+    addTo(cx - 1, cy, side * 0.4);
+    addTo(cx + 1, cy, side * 0.4);
+    addTo(cx, cy - 1, side * 0.4);
+    addTo(cx, cy + 1, side * 0.4);
 
     this.paintBuf[idx] += add;
   }
@@ -1169,20 +1179,15 @@ class SprayPaint {
     const cx = (x / this.bufScale) | 0;
     const cy = (y / this.bufScale) | 0;
     if (cx < 0 || cy < 0 || cx >= this.bufW || cy >= this.bufH) return;
-
     const idx = cy * this.bufW + cx;
 
-    // strong speed gate: only when really slow/lingering
-    if (speed > this.V_SLOW * 0.7) return;
-
-    // time-based throttle per cell (prevents “3 instant drips” at one spot)
-    const nowMs = performance.now() | 0;
-    if (nowMs - this._lastSpawnAt[idx] < this.MIN_SPAWN_INTERVAL_MS) return;
-
-    // frame cooldown as a second guard
+    const now = performance.now();
+    const lastAt = this._lastSpawnAt[idx];
+    if (now - lastAt < this.MIN_SPAWN_INTERVAL_MS) return; // min 1.3s gap
     if (this._spawnCooldown[idx] > 0) return;
+    if (speed > this.V_SLOW * 0.8) return;
 
-    // pooled wetness in 3×3 with neighbor weight
+    // pooled wetness in 3×3 neighborhood
     let pool = 0;
     for (let oy = -1; oy <= 1; oy++) {
       const yy = cy + oy;
@@ -1196,77 +1201,110 @@ class SprayPaint {
     }
     const centerWet = this.paintBuf[idx];
 
-    // thresholds tighten as you slow down (unchanged idea)
+    // --- Soft threshold logic (smoother ramp-up) ---
     const slowFactor =
       speed < this.V_SLOW ? this.V_SLOW / Math.max(20, speed) : 1;
     const needCenter = this.DRIP_THRESHOLD * Math.min(1.5, slowFactor);
     const needPool = this.NBR_MIN * Math.min(1.5, slowFactor);
-    if (centerWet < needCenter || pool < needPool) return;
 
-    // if there’s an existing drip very close, MERGE volume instead of spawning a new one
+    const centerRatio = centerWet / needCenter;
+    const poolRatio = pool / needPool;
+    const triggerScore = Math.min(1, 0.5 * centerRatio + 0.5 * poolRatio);
+
+    // Smooth sigmoid ramp to delay early spawn
+    const spawnProb = Math.pow(Math.max(0, triggerScore - 0.8), 2.8) * 5.2;
+    if (Math.random() > spawnProb) return;
+
+    // --- Find best spawn cell near center (bias toward center) ---
+    let bestIx = cx,
+      bestIy = cy,
+      bestScore = -Infinity;
+    for (let oy = -1; oy <= 1; oy++) {
+      const yy = cy + oy;
+      if (yy < 0 || yy >= this.bufH) continue;
+      for (let ox = -1; ox <= 1; ox++) {
+        const xx = cx + ox;
+        if (xx < 0 || xx >= this.bufW) continue;
+        const dist2 = ox * ox + oy * oy;
+        const spatial = Math.exp(-dist2 * 0.9); // Gaussian falloff
+        const w = this.paintBuf[yy * this.bufW + xx];
+        const score = spatial * w;
+        if (score > bestScore) {
+          bestScore = score;
+          bestIx = xx;
+          bestIy = yy;
+        }
+      }
+    }
+
+    const spawnX = (bestIx + 0.5) * this.bufScale;
+    const spawnY = (bestIy + 0.5) * this.bufScale;
+    const jitterX = (Math.random() - 0.5) * (Math.random() < 0.85 ? 1.6 : 3.0); // mostly centered
+    const jitterY = (Math.random() - 0.5) * (Math.random() < 0.85 ? 1.6 : 3.0);
+    const sx = spawnX + jitterX;
+    const sy = spawnY + jitterY;
+
+    // --- Merge nearby drips instead of new one ---
     for (let j = this.drips.length - 1; j >= 0; j--) {
       const d = this.drips[j];
       if (
-        Math.abs(d.x - x) < this.MIN_DRIP_SPACING &&
-        Math.abs(d.y - y) < this.MIN_DRIP_SPACING * 0.8
+        Math.abs(d.x - sx) < this.MIN_DRIP_SPACING &&
+        Math.abs(d.y - sy) < this.MIN_DRIP_SPACING * 0.8
       ) {
-        const addVol = Math.min(0.6 * (1 + (pool - this.DRIP_THRESHOLD)), 1.2);
-        const addBaseR = Math.max(1.6, d.baseR * (0.9 + Math.random() * 0.2));
+        const addVol = Math.min(0.45 * (1 + (pool - this.DRIP_THRESHOLD)), 1.2);
+        const addBaseR = Math.max(2.0, d.baseR * 0.92);
         this._mergeIntoDrip(d, addBaseR, addVol);
-        // still start a cooldown so more don’t pop instantly
-        this._spawnCooldown[idx] = this.SPAWN_COOLDOWN_FRAMES;
-        this._lastSpawnAt[idx] = nowMs;
+        this._spawnCooldown[idx] = this.SPAWN_COOLDOWN_FRAMES * 2;
+        this._lastSpawnAt[idx] = now;
         return;
       }
     }
 
-    // drain a little and enforce capacity
+    // drain & capacity check
     this.paintBuf[idx] = Math.max(0, centerWet - this.DRIP_HYST);
     if (this.drips.length >= this.MAX_DRIPS) return;
 
-    // base size/volume
     const areaScore = Math.max(0, pool - this.DRIP_THRESHOLD);
-    const vol = Math.min(1.6, 0.6 + 1.2 * areaScore);
+    const slowClamp =
+      speed < this.V_SLOW ? 0.75 + 0.25 * (speed / this.V_SLOW) : 1;
+    const vol = Math.min(1.6 * slowClamp, 0.6 + 1.2 * areaScore);
     const baseR = Math.max(
-      2.1,
-      1.6 + 0.9 * Math.sqrt(areaScore + 0.01) + (this.nozzleSize / 48) * 0.7
+      2.6,
+      (1.6 + 0.9 * Math.sqrt(areaScore + 0.01) + (this.nozzleSize / 48) * 0.7) *
+        slowClamp
     );
 
-    // per-drip shape profile for natural variety
-    const profile = {
-      widenK: 1.02 + Math.random() * 0.2, // growth rate
-      wobbleA: this.LATERAL_SPREAD * (0.4 + Math.random() * 1.0), // lateral meander
-      wobbleF: 0.5 + Math.random() * 1.2, // wobble freq
-      taperTo:
-        this.TAIL_TAPER_MIN +
-        Math.random() * (this.TAIL_TAPER_MAX - this.TAIL_TAPER_MIN),
-      tipBias: 0.6 + Math.random() * 0.6,
-      // NEW: radius noise & tail hook parameters
-      noiseF:
-        this.SHAPE_NOISE_FREQ[0] +
-        Math.random() * (this.SHAPE_NOISE_FREQ[1] - this.SHAPE_NOISE_FREQ[0]),
-      seed: Math.random() * 1000,
-      hookDir: Math.random() < 0.5 ? -1 : 1, // left/right
-      hookJ: 0.65 + Math.random() * 0.7, // per-drip hook intensity
-      bead: Math.random() < this.TAIL_BEAD_CHANCE, // tip bead on/off
-    };
-
     this.drips.push({
-      x,
-      y,
-      px: x,
-      py: y,
+      x: sx,
+      y: sy,
+      px: sx,
+      py: sy,
       vy: 0,
       vol,
       baseR,
       len: 0,
-      life: 1,
-      t: 0, // internal time for wobble
-      profile,
+      life: 1.0,
+      t: 0,
+      profile: {
+        wobbleF: 0.5 + Math.random() * 1.2,
+        wobbleA: this.LATERAL_SPREAD * (0.4 + Math.random() * 1.0),
+        hookJ: 0.65 + Math.random() * 0.7,
+        hookDir: Math.random() < 0.5 ? -1 : 1,
+        widenK: 1.02 + Math.random() * 0.2,
+        seed: Math.random() * 1000,
+        noiseF:
+          this.SHAPE_NOISE_FREQ[0] +
+          Math.random() * (this.SHAPE_NOISE_FREQ[1] - this.SHAPE_NOISE_FREQ[0]),
+        taperTo:
+          this.TAIL_TAPER_MIN +
+          Math.random() * (this.TAIL_TAPER_MAX - this.TAIL_TAPER_MIN),
+        bead: Math.random() < this.TAIL_BEAD_CHANCE,
+      },
     });
 
-    this._spawnCooldown[idx] = this.SPAWN_COOLDOWN_FRAMES;
-    this._lastSpawnAt[idx] = nowMs;
+    // cooldowns
+    this._spawnCooldown[idx] = this.SPAWN_COOLDOWN_FRAMES * 2; // 1.2s cooldown
+    this._lastSpawnAt[idx] = now;
   }
 
   // --- 4) _updateDrips(dt) with TRAIL/HEAD/cap & frame max logs ---
@@ -1285,7 +1323,7 @@ class SprayPaint {
       const d = this.drips[i];
       d.t += dt;
 
-      // gravity + damping
+      // physics
       d.gravityScale = 0.85 + Math.random() * 0.3;
       d.vy += this.GRAVITY * d.gravityScale * dt * (0.55 + 0.45 * d.vol);
       d.vy *= Math.exp(-this.VISCOSITY * dt);
@@ -1293,45 +1331,49 @@ class SprayPaint {
       d.py = d.y;
       d.y += d.vy * dt;
 
-      // --- lateral wobble + hooked tail curvature (len-normalized) ---
-      const lenNorm = d.len / (d.len + 28); // 0..1, grows with length
+      // --- Lateral wobble + hooked curvature ---
+      const lenNorm = d.len / (d.len + 28);
+      const wobbleEase = Math.min(1, Math.pow(lenNorm, 1.2));
       const wobble =
-        Math.sin(d.t * (3.0 * d.profile.wobbleF)) * d.profile.wobbleA;
+        Math.sin(d.t * (3.0 * d.profile.wobbleF)) *
+        d.profile.wobbleA *
+        wobbleEase;
+
       const hookGain =
         this.TAIL_HOOK_STRENGTH *
         d.profile.hookJ *
-        (1 + 0.6 * lenNorm * lenNorm);
-      d.x += wobble * dt + d.profile.hookDir * hookGain * lenNorm * dt * 26;
+        (0.6 + 0.4 * lenNorm * lenNorm);
+
+      const lateral =
+        wobble * dt + d.profile.hookDir * hookGain * lenNorm * dt * 22;
+      const maxSide = Math.min(10, 0.35 * d.len);
+      d.x += Math.max(-maxSide, Math.min(maxSide, lateral));
 
       const dy = d.y - d.py;
       d.len += Math.abs(dy);
 
-      // stamps along segment
+      // --- Draw trail ---
       const stepPx = 1.0;
       const steps = Math.max(1, Math.floor(Math.abs(dy) / stepPx));
-      const aBase = 0.22 * d.vol * toneParity;
+      const aBase = 0.26 * d.vol * toneParity;
 
       for (let s = 1; s <= steps; s++) {
         const t = s / steps;
         const yy = d.py + dy * t;
 
-        // widening (existing)
         const widen = Math.min(1.14, 1.0 + 0.0015 * d.len * d.profile.widenK);
-
-        // base radius (existing)
         const capR = this.trailCapFor(d);
         const elongate = 1 + Math.min(0.4, d.len * 0.003);
         let rawR =
           d.baseR * elongate * (1.06 + 0.62 * d.vol) * widen * (1.0 + 0.12 * t);
 
-        // --- NEW: low-frequency radius noise → small bulges/skinny sections ---
+        // small shape noise
         const n = this._smoothNoise1D(
           d.profile.seed + d.len * 0.05 * d.profile.noiseF
-        ); // 0..1
-        const jitter = 1 + this.SHAPE_NOISE_AMP * (n - 0.5); // ~0.92..1.08
+        );
+        const jitter = 1 + this.SHAPE_NOISE_AMP * (n - 0.5);
         rawR *= jitter;
 
-        // clamp smoothly to cap
         let R = rawR;
         if (rawR >= capR) {
           const overshoot = Math.min(1.0, (rawR - capR) / Math.max(1e-3, capR));
@@ -1340,10 +1382,7 @@ class SprayPaint {
         }
         R = this._safeR(R);
 
-        // slight cross-axis jitter + gentle hook bias baked in already via d.x
         const xx = d.x + (Math.random() - 0.5) * 0.4 * R;
-
-        // alpha falloff near cap (existing)
         const nearCap = R / Math.max(1e-3, capR);
         const falloff = Math.max(0.35, 1 - 0.65 * nearCap * nearCap);
         const alpha = Math.max(
@@ -1354,53 +1393,47 @@ class SprayPaint {
         ctx.globalAlpha = alpha;
         ctx.drawImage(this.getBrush(R), xx - R, yy - R);
 
-        // Tiny chance of a slightly thicker "pool" near the trail's upper quarter.
+        // occasional thicker pool near upper trail
         if (Math.random() < 0.05 && t < 0.25) {
           ctx.globalAlpha = Math.min(1, alpha * 1.5);
           const Rb = R * 1.2;
           ctx.drawImage(this.getBrush(Rb), xx - Rb, yy - Rb);
-          // no need to reset globalAlpha; you'll set it again on the next loop
         }
 
-        this._accumWet(xx, yy, alpha * 0.06);
+        this._accumWet(xx, yy, alpha * 0.05);
       }
 
-      // head
+      // --- Drip head ---
       const Rhead = this.headRadiusFor(d);
       ctx.globalAlpha = Math.min(0.22, (0.16 + 0.1 * d.vol) * toneParity);
       ctx.drawImage(this.getBrush(Rhead), d.x - Rhead, d.y - Rhead);
 
-      // occasional tiny flecks just below the tail tip
-      {
-        const toneParity = 0.9; // keep same tone as paint; tweak (e.g., 0.9) if too bright
-        if (Math.random() < 0.15) {
-          for (let k = 0; k < 3; k++) {
-            const rr = 0.5 + Math.random(); // 0.5–1.5 px
-            const xx2 = d.x + (Math.random() - 0.5) * Rhead * 2; // slight horizontal spread
-            const yy2 = d.y + (Math.random() + 0.2) * Rhead * 3; // below the head
-            ctx.globalAlpha = 0.05 * toneParity;
-            ctx.drawImage(this.getBrush(rr), xx2 - rr, yy2 - rr);
-          }
+      // tiny flecks below the tip
+      if (Math.random() < 0.12) {
+        for (let k = 0; k < 3; k++) {
+          const rr = 0.5 + Math.random();
+          const xx2 = d.x + (Math.random() - 0.5) * Rhead * 2;
+          const yy2 = d.y + (Math.random() + 0.2) * Rhead * 3;
+          ctx.globalAlpha = 0.05 * toneParity;
+          ctx.drawImage(this.getBrush(rr), xx2 - rr, yy2 - rr);
         }
       }
 
-      // life
+      // life decay
       d.vol -=
         (this.DEPOSIT_PER_PX * Math.abs(dy)) / 60 + this.WET_EVAP * dt * 0.45;
 
-      // rounded, slightly variable tip at end (no flat cutoffs)
+      // finish drip (tapered tip)
       if (d.vol <= 0.08 || d.len > 70 || d.y > this.canvas.height + 5) {
-        this._currentDripProfile = d.profile; // <-- for tip bead helper
+        this._currentDripProfile = d.profile;
         const taperTo = Math.max(0.8, d.baseR * d.profile.taperTo);
-        const stepsTip = this.TAIL_CAP_STEPS;
-        const dirY = dy >= 0 ? 1 : -1;
         this._drawTaperTip(
           d.x,
           d.y,
-          dirY,
+          dy >= 0 ? 1 : -1,
           Math.max(1.0, Rhead),
           taperTo,
-          stepsTip,
+          this.TAIL_CAP_STEPS,
           0.14 * toneParity
         );
         this._currentDripProfile = null;
@@ -1411,7 +1444,6 @@ class SprayPaint {
 
     ctx.globalCompositeOperation = prevOp;
   }
-
   // game loop hook — call once after constructing the tool
   startDripLoop() {
     console.log(`🚀 Starting drip simulation loop`);
@@ -1441,8 +1473,8 @@ class SprayPaint {
   }
 
   trailCapFor(d) {
-    const byBase = d.baseR * 1.6; // gentler than 2.4
-    const byVol = 6.0 + 7.5 * Math.sqrt(d.vol); // grows slowly with vol
+    const byBase = d.baseR * 2.0; // gentler than 2.4
+    const byVol = 8.0 + 9.0 * Math.sqrt(d.vol); // grows slowly with vol
     const cap = Math.min(byBase, byVol, this.GLOBAL_TRAIL_CAP);
     if (cap < d.baseR) {
       console.warn(
@@ -1536,6 +1568,7 @@ class SprayPaint {
     const s = Math.sin(t * 12.9898) * 43758.5453;
     return s - Math.floor(s);
   }
+
   _smoothNoise1D(t) {
     const i = Math.floor(t),
       f = t - i;

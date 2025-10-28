@@ -43,10 +43,10 @@ A high-performance, realistic spray paint simulator built with HTML5 Canvas and 
 
 | Control              | Range     | Default | Description                         |
 | -------------------- | --------- | ------- | ----------------------------------- |
-| **Drip Threshold**   | 10-65%    | 55%     | Paint accumulation needed for drips |
-| **Drip Gravity**     | 500-3000  | 1580    | How fast drips fall                 |
-| **Drip Viscosity**   | 1.0-10.0  | 6.2     | Paint thickness/stickiness          |
-| **Drip Evaporation** | 0.05-0.50 | 0.40    | How quickly paint evaporates        |
+| **Drip Threshold**   | 10-65%    | 51%     | Paint accumulation needed for drips |
+| **Drip Gravity**     | 500-3000  | 500     | How fast drips fall                 |
+| **Drip Viscosity**   | 1.0-10.0  | 8.9     | Paint thickness/stickiness          |
+| **Drip Evaporation** | 0.05-0.50 | 0.18    | How quickly paint evaporates        |
 | **Toggle Drips**     | Button    | On      | Enable/disable drip simulation      |
 
 ## ⌨️ Keyboard Shortcuts
