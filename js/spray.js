@@ -10,7 +10,7 @@ class SprayPaint {
 
     // Spray settings
     this.color = "#000000";
-    this.nozzleSize = 40;
+    this.nozzleSize = 25;
     this.softness = 0.95; // 95% softness
     this.opacity = 1.0; // 100% opacity
     this.flow = 1.2; // 120% flow
@@ -25,15 +25,15 @@ class SprayPaint {
     this.pressureSmoothing = 0.2;
 
     // Scatter controls
-    this.scatterRadiusMultiplier = 1.5; // 150% default
+    this.scatterRadiusMultiplier = 2.0; // 200% default
     this.scatterAmountMultiplier = 1.0; // 100% default - full density
-    this.scatterSizeMultiplier = 1.0; // 100% default
+    this.scatterSizeMultiplier = 1.5; // 150% default
 
     // Overspray control
-    this.oversprayMultiplier = 0.92; // 92% default
+    this.oversprayMultiplier = 1.0; // 100% default
 
     // Distance physics
-    this.distance = 10; // 10px default
+    this.distance = 6; // 6px default
     this.theta0 = 0.2; // ~11.5°
     this.kTheta = 0.1;
     this.Dref = 40; // px nozzle reference
@@ -95,6 +95,30 @@ class SprayPaint {
     this.thinFastScale = 0.7; // min scale when very fast
     this.V_FAST = this.V_REF * 20; // speed at which thinning saturates
     this.speedCurve = 1.3; // >1 = smoother, <1 = snappier
+
+    // ---- add to constructor ----
+    this._drawingDrip = false; // internal: true while drawing drips
+    this.metallicShimmerSpray = false; // shimmer on spray dots (off = exact match)
+    this.metallicShimmerDrip = false; // shimmer on drips   (off = exact match)
+    this.dripHighlightGain = 0.6; // 0..1, reduce bright center on drips
+
+    // --- tail & variation controls ---
+    this.TAIL_TAPER_MIN = 0.35; // 0..1 how thin the tail tip can get (fraction of baseR)
+    this.TAIL_TAPER_MAX = 0.85; // 0..1 upper bound for taper factor
+    this.TAIL_CAP_STEPS = 7; // how many stamps to round the tip when a drip ends
+
+    // per-location spawn throttling (ms); avoid multiple instant drips
+    this.MIN_SPAWN_INTERVAL_MS = 1000; // ~0.55s
+    this._lastSpawnAt = new Uint32Array(this.paintBuf.length); // per-cell timestamp (ms)
+
+    // optional: longer cell cooldown after a spawn (frames, decremented in loop)
+    this.SPAWN_COOLDOWN_FRAMES = 40; // ~0.6s @ ~60fps
+
+    // --- extra randomness for drip shapes ---
+    this.SHAPE_NOISE_AMP = 0.22; // 0..0.3 — how wobbly the radius gets along the trail
+    this.SHAPE_NOISE_FREQ = [0.7, 1.6]; // Hz-ish range for the 1D noise speed
+    this.TAIL_HOOK_STRENGTH = 0.6; // 0..1 — curvature of the tail (randomized per drip)
+    this.TAIL_BEAD_CHANCE = 0.35; // 0..1 — chance of a tiny bead at the very tip
   }
 
   setColor(color) {
@@ -144,6 +168,13 @@ class SprayPaint {
 
   setDistance(zPx) {
     this.distance = Math.max(2, zPx | 0);
+  }
+
+  // NEW: choose a compositor for drips based on color
+  getDripCompositeMode() {
+    // Metallics (like gold) should not be multiplied — it darkens them.
+    // Use normal blending for identical tone. Keep multiply for non-metal.
+    return this.isGoldColor(this.color) ? "source-over" : "multiply";
   }
 
   // Drip control methods
@@ -203,32 +234,28 @@ class SprayPaint {
 
   // --- HD brush with devicePixelRatio & smoothing ---
   getBrush(radius) {
-    // guard & cache key (snap to 0.25px so cache stays useful but smooth)
     const R = this._safeR(radius);
-    const r = Math.max(1, Math.round(R * 4) / 4); // quarter-px cache bins
+    const r = Math.max(1, Math.round(R * 4) / 4);
     const dpr = Math.max(1, window.devicePixelRatio || 1);
-    const key = `hd-${r}-${dpr}-${this.color}-${this.softness}`;
+    const variant = this._drawingDrip ? "drip" : "spray"; // NEW
+    const key = `hd-${r}-${dpr}-${this.color}-${this.softness}-${variant}`;
 
     if (this.stampCache.has(key)) return this.stampCache.get(key);
 
-    // create a higher-res brush then downsample when drawing
     const px = Math.ceil(r * 2 * dpr);
     const c = document.createElement("canvas");
     c.width = c.height = Math.max(2, px);
 
-    const g = c.getContext("2d", { alpha: true, willReadFrequently: false });
+    const g = c.getContext("2d", { alpha: true });
     if (!g) return c;
-
-    // ensure smoothing on this source
     g.imageSmoothingEnabled = true;
     g.imageSmoothingQuality = "high";
 
-    // build radial gradient in DPR space
     const rr = r * dpr;
 
-    // Check if this is a gold color and apply metallic effect
     if (this.isGoldColor(this.color)) {
-      this.createMetallicBrush(g, rr, r, dpr);
+      // pass variant so drips use toned-down highlight
+      this.createMetallicBrush(g, rr, r, dpr, variant);
     } else {
       const grad = g.createRadialGradient(rr, rr, 0, rr, rr, rr);
       grad.addColorStop(0, this.color);
@@ -250,75 +277,62 @@ class SprayPaint {
   }
 
   // Create metallic brush effect for gold color
-  createMetallicBrush(ctx, radius, baseRadius, dpr) {
-    const centerX = radius;
-    const centerY = radius;
+  // helper
+  _hexToRgba(hex, a = 1) {
+    const c = hex.replace("#", "");
+    const r = parseInt(c.slice(0, 2), 16),
+      g = parseInt(c.slice(2, 4), 16),
+      b = parseInt(c.slice(4, 6), 16);
+    return `rgba(${r},${g},${b},${a})`;
+  }
 
-    // Create multiple overlapping gradients for metallic effect
-    const metallicGradients = [
-      // Base gold
-      {
-        gradient: ctx.createRadialGradient(
-          centerX,
-          centerY,
-          0,
-          centerX,
-          centerY,
-          radius
-        ),
-        stops: [
-          { pos: 0, color: "#FFD700" }, // Bright gold center
-          { pos: 0.3, color: "#EAC677" }, // Original gold
-          { pos: 0.7, color: "#D4AF37" }, // Darker gold
-          { pos: 1, color: "#B8860B" }, // Dark gold edge
-        ],
-      },
-      // Metallic highlight
-      {
-        gradient: ctx.createRadialGradient(
-          centerX * 0.7,
-          centerY * 0.7,
-          0,
-          centerX,
-          centerY,
-          radius * 0.6
-        ),
-        stops: [
-          { pos: 0, color: "#FFF8DC" }, // Light highlight
-          { pos: 0.4, color: "#FFD700" }, // Gold highlight
-          { pos: 1, color: "rgba(255, 215, 0, 0)" }, // Fade out
-        ],
-      },
-      // Secondary metallic reflection
-      {
-        gradient: ctx.createRadialGradient(
-          centerX * 1.2,
-          centerY * 0.8,
-          0,
-          centerX,
-          centerY,
-          radius * 0.4
-        ),
-        stops: [
-          { pos: 0, color: "rgba(255, 255, 255, 0.3)" }, // White highlight
-          { pos: 0.3, color: "rgba(255, 215, 0, 0.2)" }, // Gold reflection
-          { pos: 1, color: "rgba(255, 215, 0, 0)" }, // Fade out
-        ],
-      },
-    ];
+  // variant: "spray" | "drip"
+  createMetallicBrush(ctx, radius, baseRadius, dpr, variant = "spray") {
+    const cx = radius,
+      cy = radius;
+    const gain = variant === "drip" ? this.dripHighlightGain : 1.0; // tone down on drips
 
-    // Apply each gradient layer
-    metallicGradients.forEach(({ gradient, stops }) => {
-      stops.forEach(({ pos, color }) => {
-        gradient.addColorStop(pos, color);
-      });
+    // Base body
+    const g0 = ctx.createRadialGradient(cx, cy, 0, cx, cy, radius);
+    g0.addColorStop(0.0, this._hexToRgba("#FFD700", 0.85 * gain)); // bright core
+    g0.addColorStop(0.3, "#EAC677");
+    g0.addColorStop(0.7, "#D4AF37");
+    g0.addColorStop(1.0, this._hexToRgba("#B8860B", 1.0));
+    ctx.fillStyle = g0;
+    ctx.fillRect(0, 0, ctx.canvas.width, ctx.canvas.height);
 
-      ctx.fillStyle = gradient;
-      ctx.fillRect(0, 0, ctx.canvas.width, ctx.canvas.height);
-    });
+    // Highlight (reduced on drips)
+    const g1 = ctx.createRadialGradient(
+      cx * 0.72,
+      cy * 0.72,
+      0,
+      cx,
+      cy,
+      radius * 0.62
+    );
+    g1.addColorStop(0.0, this._hexToRgba("#FFF8DC", 0.55 * gain));
+    g1.addColorStop(0.4, this._hexToRgba("#FFD700", 0.45 * gain));
+    g1.addColorStop(1.0, this._hexToRgba("#FFD700", 0.0));
+    ctx.fillStyle = g1;
+    ctx.fillRect(0, 0, ctx.canvas.width, ctx.canvas.height);
 
-    // Add subtle noise for metallic texture
-    this.addMetallicNoise(ctx, centerX, centerY, radius);
+    // Second reflection (very subtle)
+    const g2 = ctx.createRadialGradient(
+      cx * 1.2,
+      cy * 0.8,
+      0,
+      cx,
+      cy,
+      radius * 0.4
+    );
+    g2.addColorStop(0.0, this._hexToRgba("#FFFFFF", 0.2 * gain));
+    g2.addColorStop(0.3, this._hexToRgba("#FFD700", 0.15 * gain));
+    g2.addColorStop(1.0, this._hexToRgba("#FFD700", 0.0));
+    ctx.fillStyle = g2;
+    ctx.fillRect(0, 0, ctx.canvas.width, ctx.canvas.height);
+
+    // Subtle texture (same as yours; left as-is)
+    this.addMetallicNoise(ctx, cx, cy, radius);
   }
 
   // Add metallic noise texture
@@ -712,7 +726,11 @@ class SprayPaint {
       this.ctx.globalAlpha = dotOpacity;
 
       // Add metallic shimmer for gold particles
-      if (this.isGoldColor(this.color) && Math.random() < 0.3) {
+      if (
+        this.isGoldColor(this.color) &&
+        this.metallicShimmerSpray &&
+        Math.random() < 0.3
+      ) {
         this.ctx.globalCompositeOperation = "screen";
         this.ctx.drawImage(b, dotX - rndSize, dotY - rndSize);
         this.ctx.globalCompositeOperation = "source-over";
@@ -1151,10 +1169,18 @@ class SprayPaint {
     const cx = (x / this.bufScale) | 0;
     const cy = (y / this.bufScale) | 0;
     if (cx < 0 || cy < 0 || cx >= this.bufW || cy >= this.bufH) return;
+
     const idx = cy * this.bufW + cx;
+
+    // strong speed gate: only when really slow/lingering
+    if (speed > this.V_SLOW * 0.7) return;
+
+    // time-based throttle per cell (prevents “3 instant drips” at one spot)
+    const nowMs = performance.now() | 0;
+    if (nowMs - this._lastSpawnAt[idx] < this.MIN_SPAWN_INTERVAL_MS) return;
+
+    // frame cooldown as a second guard
     if (this._spawnCooldown[idx] > 0) return;
-    // hard speed gate: only allow spawns when really slow/lingering
-    if (speed > this.V_SLOW * 0.8) return;
 
     // pooled wetness in 3×3 with neighbor weight
     let pool = 0;
@@ -1170,43 +1196,60 @@ class SprayPaint {
     }
     const centerWet = this.paintBuf[idx];
 
-    // tighter requirements when moving slowly
+    // thresholds tighten as you slow down (unchanged idea)
     const slowFactor =
       speed < this.V_SLOW ? this.V_SLOW / Math.max(20, speed) : 1;
     const needCenter = this.DRIP_THRESHOLD * Math.min(1.5, slowFactor);
     const needPool = this.NBR_MIN * Math.min(1.5, slowFactor);
     if (centerWet < needCenter || pool < needPool) return;
 
-    // merge with nearby drip
+    // if there’s an existing drip very close, MERGE volume instead of spawning a new one
     for (let j = this.drips.length - 1; j >= 0; j--) {
       const d = this.drips[j];
       if (
         Math.abs(d.x - x) < this.MIN_DRIP_SPACING &&
         Math.abs(d.y - y) < this.MIN_DRIP_SPACING * 0.8
       ) {
-        const addVol = Math.min(0.45 * (1 + (pool - this.DRIP_THRESHOLD)), 1.2);
-        const addBaseR = Math.max(2.0, d.baseR * 0.92); // treat source as similar scale
+        const addVol = Math.min(0.6 * (1 + (pool - this.DRIP_THRESHOLD)), 1.2);
+        const addBaseR = Math.max(1.6, d.baseR * (0.9 + Math.random() * 0.2));
         this._mergeIntoDrip(d, addBaseR, addVol);
-        this._spawnCooldown[idx] = 10;
+        // still start a cooldown so more don’t pop instantly
+        this._spawnCooldown[idx] = this.SPAWN_COOLDOWN_FRAMES;
+        this._lastSpawnAt[idx] = nowMs;
         return;
       }
     }
 
-    // drain & capacity check
+    // drain a little and enforce capacity
     this.paintBuf[idx] = Math.max(0, centerWet - this.DRIP_HYST);
     if (this.drips.length >= this.MAX_DRIPS) return;
 
-    // thicker base + moderate volume
+    // base size/volume
     const areaScore = Math.max(0, pool - this.DRIP_THRESHOLD);
-    const slowClamp =
-      speed < this.V_SLOW ? 0.75 + 0.25 * (speed / this.V_SLOW) : 1;
-
-    const vol = Math.min(1.6 * slowClamp, 0.6 + 1.2 * areaScore);
+    const vol = Math.min(1.6, 0.6 + 1.2 * areaScore);
     const baseR = Math.max(
       2.1,
-      (1.6 + 0.9 * Math.sqrt(areaScore + 0.01) + (this.nozzleSize / 48) * 0.7) *
-        slowClamp
+      1.6 + 0.9 * Math.sqrt(areaScore + 0.01) + (this.nozzleSize / 48) * 0.7
     );
+
+    // per-drip shape profile for natural variety
+    const profile = {
+      widenK: 1.02 + Math.random() * 0.2, // growth rate
+      wobbleA: this.LATERAL_SPREAD * (0.4 + Math.random() * 1.0), // lateral meander
+      wobbleF: 0.5 + Math.random() * 1.2, // wobble freq
+      taperTo:
+        this.TAIL_TAPER_MIN +
+        Math.random() * (this.TAIL_TAPER_MAX - this.TAIL_TAPER_MIN),
+      tipBias: 0.6 + Math.random() * 0.6,
+      // NEW: radius noise & tail hook parameters
+      noiseF:
+        this.SHAPE_NOISE_FREQ[0] +
+        Math.random() * (this.SHAPE_NOISE_FREQ[1] - this.SHAPE_NOISE_FREQ[0]),
+      seed: Math.random() * 1000,
+      hookDir: Math.random() < 0.5 ? -1 : 1, // left/right
+      hookJ: 0.65 + Math.random() * 0.7, // per-drip hook intensity
+      bead: Math.random() < this.TAIL_BEAD_CHANCE, // tip bead on/off
+    };
 
     this.drips.push({
       x,
@@ -1217,20 +1260,14 @@ class SprayPaint {
       vol,
       baseR,
       len: 0,
-      life: 1.0,
+      life: 1,
+      t: 0, // internal time for wobble
+      profile,
     });
-    this._spawnCooldown[idx] = 10;
 
-    console.log(
-      `SPAWN id=${this.drips.length - 1} @(${x.toFixed(1)},${y.toFixed(
-        1
-      )}) baseR=${baseR.toFixed(2)} vol=${vol.toFixed(
-        2
-      )} pool=${areaScore.toFixed(2)}`
-    );
+    this._spawnCooldown[idx] = this.SPAWN_COOLDOWN_FRAMES;
+    this._lastSpawnAt[idx] = nowMs;
   }
-
-  // time-based update for drips (call every frame)
 
   // --- 4) _updateDrips(dt) with TRAIL/HEAD/cap & frame max logs ---
   _updateDrips(dt) {
@@ -1238,106 +1275,77 @@ class SprayPaint {
 
     const ctx = this.ctx;
     const prevOp = ctx.globalCompositeOperation;
-    ctx.globalCompositeOperation = "multiply";
+    const dripOp = this.getDripCompositeMode();
+    ctx.globalCompositeOperation = dripOp;
 
-    let maxTrailSeen = 0;
+    const isGold = this.isGoldColor(this.color);
+    const toneParity = isGold ? 0.92 : 1.0;
 
     for (let i = this.drips.length - 1; i >= 0; i--) {
       const d = this.drips[i];
+      d.t += dt;
 
-      // motion
-      d.vy += this.GRAVITY * dt * (0.55 + 0.45 * d.vol);
+      // gravity + damping
+      d.gravityScale = 0.85 + Math.random() * 0.3;
+      d.vy += this.GRAVITY * d.gravityScale * dt * (0.55 + 0.45 * d.vol);
       d.vy *= Math.exp(-this.VISCOSITY * dt);
+
       d.py = d.y;
       d.y += d.vy * dt;
 
-      // small lateral meander
-      d.x += (Math.random() - 0.5) * this.LATERAL_SPREAD * (0.6 + 0.6 * d.vol);
+      // --- lateral wobble + hooked tail curvature (len-normalized) ---
+      const lenNorm = d.len / (d.len + 28); // 0..1, grows with length
+      const wobble =
+        Math.sin(d.t * (3.0 * d.profile.wobbleF)) * d.profile.wobbleA;
+      const hookGain =
+        this.TAIL_HOOK_STRENGTH *
+        d.profile.hookJ *
+        (1 + 0.6 * lenNorm * lenNorm);
+      d.x += wobble * dt + d.profile.hookDir * hookGain * lenNorm * dt * 26;
 
       const dy = d.y - d.py;
       d.len += Math.abs(dy);
 
-      // trail stamps
+      // stamps along segment
       const stepPx = 1.0;
       const steps = Math.max(1, Math.floor(Math.abs(dy) / stepPx));
-      const aBase = 0.22 * d.vol;
+      const aBase = 0.22 * d.vol * toneParity;
 
       for (let s = 1; s <= steps; s++) {
         const t = s / steps;
         const yy = d.py + dy * t;
 
-        // 🔧 shrink growth with length a bit; clamp max spread
-        const widen = Math.min(1.12, 1.0 + 0.0015 * d.len);
+        // widening (existing)
+        const widen = Math.min(1.14, 1.0 + 0.0015 * d.len * d.profile.widenK);
 
+        // base radius (existing)
         const capR = this.trailCapFor(d);
-        const rawR =
-          d.baseR *
-          (1.08 + 0.6 * d.vol) *
-          Math.min(1.12, 1.0 + 0.0015 * d.len) *
-          (1.0 + 0.1 * t);
+        const elongate = 1 + Math.min(0.4, d.len * 0.003);
+        let rawR =
+          d.baseR * elongate * (1.06 + 0.62 * d.vol) * widen * (1.0 + 0.12 * t);
 
-        // ease down if we overshoot cap (prevents flat-topped disks)
-        let drawR = rawR;
+        // --- NEW: low-frequency radius noise → small bulges/skinny sections ---
+        const n = this._smoothNoise1D(
+          d.profile.seed + d.len * 0.05 * d.profile.noiseF
+        ); // 0..1
+        const jitter = 1 + this.SHAPE_NOISE_AMP * (n - 0.5); // ~0.92..1.08
+        rawR *= jitter;
+
+        // clamp smoothly to cap
+        let R = rawR;
         if (rawR >= capR) {
           const overshoot = Math.min(1.0, (rawR - capR) / Math.max(1e-3, capR));
-          drawR = capR - capR * 0.12 * overshoot * overshoot * (2 - overshoot); // cubic ease
-          drawR = Math.min(drawR, capR - 0.25); // tiny cushion below cap
+          R = capR - capR * 0.12 * overshoot * overshoot * (2 - overshoot);
+          R = Math.min(R, capR - 0.25);
         }
-        const R = this._safeR(drawR);
+        R = this._safeR(R);
 
-        if (s === 1) {
-          console.log(
-            `TRAIL-START id=${i} baseR=${d.baseR.toFixed(
-              2
-            )} vol=${d.vol.toFixed(2)} len=${d.len.toFixed(1)}`
-          );
-          console.log(
-            `TRAIL rawR=${rawR.toFixed(2)} capR=${capR.toFixed(
-              2
-            )} len=${d.len.toFixed(1)}`
-          );
-        }
-        if (s === steps) {
-          console.log(
-            `TRAIL rawR=${rawR.toFixed(2)} capR=${capR.toFixed(
-              2
-            )} len=${d.len.toFixed(1)}`
-          );
-        }
-        console.log(`TRAIL drawR=${R.toFixed(2)} (t=${t.toFixed(2)})`);
-        if (R >= capR - 0.3)
-          console.warn(
-            `NEAR-CAP id=${i} drawR=${R.toFixed(2)} capR=${capR.toFixed(2)}`
-          );
+        // slight cross-axis jitter + gentle hook bias baked in already via d.x
+        const xx = d.x + (Math.random() - 0.5) * 0.4 * R;
 
-        if (s === 1) {
-          console.log(
-            `TRAIL-START id=${i} baseR=${d.baseR.toFixed(
-              2
-            )} vol=${d.vol.toFixed(2)} len=${d.len.toFixed(1)}`
-          );
-          console.log(
-            `TRAIL rawR=${rawR.toFixed(2)} capR=${capR.toFixed(
-              2
-            )} len=${d.len.toFixed(1)}`
-          );
-        }
-        if (s === steps) {
-          console.log(
-            `TRAIL rawR=${rawR.toFixed(2)} capR=${capR.toFixed(
-              2
-            )} len=${d.len.toFixed(1)}`
-          );
-        }
-        console.log(`TRAIL drawR=${R.toFixed(2)} (t=${t.toFixed(2)})`);
-
-        if (R > maxTrailSeen) maxTrailSeen = R;
-
-        const xx = d.x + (Math.random() - 0.5) * 0.5 * R;
-
-        // 🔧 alpha falloff as R approaches cap (prevents cloudy disks)
+        // alpha falloff near cap (existing)
         const nearCap = R / Math.max(1e-3, capR);
-        const falloff = Math.max(0.35, 1 - 0.65 * nearCap * nearCap); // 1 → 0.35 near cap
+        const falloff = Math.max(0.35, 1 - 0.65 * nearCap * nearCap);
         const alpha = Math.max(
           0.05,
           Math.min(0.2, aBase * (0.7 + 0.5 * t) * falloff)
@@ -1346,32 +1354,59 @@ class SprayPaint {
         ctx.globalAlpha = alpha;
         ctx.drawImage(this.getBrush(R), xx - R, yy - R);
 
+        // Tiny chance of a slightly thicker "pool" near the trail's upper quarter.
+        if (Math.random() < 0.05 && t < 0.25) {
+          ctx.globalAlpha = Math.min(1, alpha * 1.5);
+          const Rb = R * 1.2;
+          ctx.drawImage(this.getBrush(Rb), xx - Rb, yy - Rb);
+          // no need to reset globalAlpha; you'll set it again on the next loop
+        }
+
         this._accumWet(xx, yy, alpha * 0.06);
       }
 
-      // head with enhanced metallic effect for gold
+      // head
       const Rhead = this.headRadiusFor(d);
-      ctx.globalAlpha = Math.min(0.22, 0.16 + 0.1 * d.vol);
+      ctx.globalAlpha = Math.min(0.22, (0.16 + 0.1 * d.vol) * toneParity);
+      ctx.drawImage(this.getBrush(Rhead), d.x - Rhead, d.y - Rhead);
 
-      // Apply enhanced metallic effect for gold drips
-      if (this.isGoldColor(this.color)) {
-        ctx.globalCompositeOperation = "screen";
-        ctx.drawImage(this.getBrush(Rhead), d.x - Rhead, d.y - Rhead);
-        ctx.globalCompositeOperation = "multiply";
-      } else {
-        ctx.drawImage(this.getBrush(Rhead), d.x - Rhead, d.y - Rhead);
+      // occasional tiny flecks just below the tail tip
+      {
+        const toneParity = 0.9; // keep same tone as paint; tweak (e.g., 0.9) if too bright
+        if (Math.random() < 0.15) {
+          for (let k = 0; k < 3; k++) {
+            const rr = 0.5 + Math.random(); // 0.5–1.5 px
+            const xx2 = d.x + (Math.random() - 0.5) * Rhead * 2; // slight horizontal spread
+            const yy2 = d.y + (Math.random() + 0.2) * Rhead * 3; // below the head
+            ctx.globalAlpha = 0.05 * toneParity;
+            ctx.drawImage(this.getBrush(rr), xx2 - rr, yy2 - rr);
+          }
+        }
       }
 
       // life
       d.vol -=
         (this.DEPOSIT_PER_PX * Math.abs(dy)) / 60 + this.WET_EVAP * dt * 0.45;
-      if (d.vol <= 0.06 || d.len > 70 || d.y > this.canvas.height + 5) {
-        this.drips.splice(i, 1);
-      }
-    }
 
-    if (maxTrailSeen > 20) {
-      console.log(`FRAME maxTrailR=${maxTrailSeen.toFixed(2)}`);
+      // rounded, slightly variable tip at end (no flat cutoffs)
+      if (d.vol <= 0.08 || d.len > 70 || d.y > this.canvas.height + 5) {
+        this._currentDripProfile = d.profile; // <-- for tip bead helper
+        const taperTo = Math.max(0.8, d.baseR * d.profile.taperTo);
+        const stepsTip = this.TAIL_CAP_STEPS;
+        const dirY = dy >= 0 ? 1 : -1;
+        this._drawTaperTip(
+          d.x,
+          d.y,
+          dirY,
+          Math.max(1.0, Rhead),
+          taperTo,
+          stepsTip,
+          0.14 * toneParity
+        );
+        this._currentDripProfile = null;
+        this.drips.splice(i, 1);
+        continue;
+      }
     }
 
     ctx.globalCompositeOperation = prevOp;
@@ -1462,6 +1497,52 @@ class SprayPaint {
         2
       )} + ${addVol.toFixed(2)})`
     );
+  }
+
+  _drawTaperTip(x, y, dirY, Rstart, taperTo, steps, alphaBase = 0.16) {
+    // Draw a small rounded teardrop at the end of a drip
+    // dirY: +1 or -1 (downwards usually +1)
+    const ctx = this.ctx;
+    const sign = Math.sign(dirY) || 1;
+    let R = Rstart;
+    for (let i = 1; i <= steps; i++) {
+      const u = i / steps;
+      // ease radius to smaller tip
+      const k = 1 - u;
+      const Ri = this._safeR(taperTo + (R - taperTo) * (k * k)); // quadratic ease
+      const yy = y + sign * i * Math.max(0.5, Ri * 0.7); // slightly tighter spacing near the tip
+      const a = Math.max(0.03, alphaBase * (k * 0.9));
+      ctx.globalAlpha = a;
+      ctx.drawImage(this.getBrush(Ri), x - Ri, yy - Ri);
+      R = Ri;
+    }
+
+    // optional tiny bead at the very tip
+    if (this._currentDripProfile && this._currentDripProfile.bead) {
+      const beadR = Math.max(0.8, R * (0.75 + Math.random() * 0.35));
+      const yy =
+        y +
+        (Math.sign(dirY) || 1) *
+          (steps * Math.max(0.5, beadR * 0.7) + beadR * 0.4);
+      const a = 0.12;
+      const b = this.getBrush(beadR);
+      this.ctx.globalAlpha = a;
+      this.ctx.drawImage(b, x - beadR, yy - beadR);
+    }
+  }
+
+  // light-weight, deterministic-ish 1D noise (smoothed value noise)
+  _noise1Dhash(t) {
+    const s = Math.sin(t * 12.9898) * 43758.5453;
+    return s - Math.floor(s);
+  }
+  _smoothNoise1D(t) {
+    const i = Math.floor(t),
+      f = t - i;
+    const a = this._noise1Dhash(i),
+      b = this._noise1Dhash(i + 1);
+    const u = f * f * (3 - 2 * f); // smoothstep
+    return a + (b - a) * u; // 0..1
   }
 
   // Clean up cache periodically
