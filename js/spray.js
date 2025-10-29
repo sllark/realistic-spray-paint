@@ -104,7 +104,7 @@ class SprayPaint {
     this._drawingDrip = false; // internal: true while drawing drips
     this.metallicShimmerSpray = false; // shimmer on spray dots (off = exact match)
     this.metallicShimmerDrip = false; // shimmer on drips   (off = exact match)
-    this.dripHighlightGain = 0.6; // 0..1, reduce bright center on drips
+    this.dripHighlightGain = 1.0; // 0..1, reduce bright center on drips
 
     // --- tail & variation controls ---
     this.TAIL_TAPER_MIN = 0.35; // 0..1 how thin the tail tip can get (fraction of baseR)
@@ -123,6 +123,10 @@ class SprayPaint {
     this.SHAPE_NOISE_FREQ = [0.7, 1.6]; // Hz-ish range for the 1D noise speed
     this.TAIL_HOOK_STRENGTH = 0.6; // 0..1 — curvature of the tail (randomized per drip)
     this.TAIL_BEAD_CHANCE = 0.35; // 0..1 — chance of a tiny bead at the very tip
+
+    this.GOLD_DRIP_ALPHA_GAIN = 1.12;   // +12% density for gold drips
+    this.GOLD_GLAZE = 0.26;             // strength of warm multiply glaze
+    this.metallicShimmerDrip = true;    // enable subtle metallic shimmer on drips
   }
 
   setColor(color) {
@@ -292,50 +296,81 @@ class SprayPaint {
 
   // variant: "spray" | "drip"
   createMetallicBrush(ctx, radius, baseRadius, dpr, variant = "spray") {
-    const cx = radius,
-      cy = radius;
-    const gain = variant === "drip" ? this.dripHighlightGain : 1.0; // tone down on drips
+    const cx = radius, cy = radius;
+  
+    // --- GOLD DRIP: match gold spray hue and density ---
+    if (this.isGoldColor(this.color) && variant === "drip") {
+      const gold = "#EAC677";
 
+      // Body gradient (same hue as spray but with enough core density)
+      const g = ctx.createRadialGradient(cx, cy, 0, cx, cy, radius);
+      g.addColorStop(0.00, this._hexToRgba(gold, 1.00));
+      g.addColorStop(this.softness * 0.80, this._hexToRgba(gold, 0.95));
+      g.addColorStop(1.00, this._hexToRgba(gold, 0.10));
+      ctx.fillStyle = g;
+      ctx.fillRect(0, 0, ctx.canvas.width, ctx.canvas.height);
+
+      // Warm midtone glaze (deepens to match sprayed coverage)
+      ctx.globalCompositeOperation = "multiply";
+      const warm = ctx.createRadialGradient(cx, cy, 0, cx, cy, radius);
+      warm.addColorStop(0.0, this._hexToRgba("#D6A84E", this.GOLD_GLAZE)); // ← tune
+      warm.addColorStop(1.0, this._hexToRgba("#D6A84E", 0.0));
+      ctx.fillStyle = warm;
+      ctx.fillRect(0, 0, ctx.canvas.width, ctx.canvas.height);
+
+      // Subtle metallic specular (only if enabled)
+      if (this.metallicShimmerDrip) {
+        ctx.globalCompositeOperation = "screen";
+        // narrow off-center highlight band
+        const band = ctx.createRadialGradient(cx * 0.78, cy * 0.72, 0, cx, cy, radius * 0.62);
+        band.addColorStop(0.00, this._hexToRgba("#FFF8DC", 0.06));
+        band.addColorStop(0.45, this._hexToRgba("#FFD700", 0.04));
+        band.addColorStop(1.00, this._hexToRgba("#FFD700", 0.00));
+        ctx.fillStyle = band;
+        ctx.fillRect(0, 0, ctx.canvas.width, ctx.canvas.height);
+
+        // a few micro sparkles (very faint, avoids glittery look)
+        if (Math.random() < 0.5) {
+          const spark = ctx.createRadialGradient(cx * 1.05, cy * 0.9, 0, cx, cy, radius * 0.35);
+          spark.addColorStop(0.00, this._hexToRgba("#FFFFFF", 0.025));
+          spark.addColorStop(1.00, this._hexToRgba("#FFFFFF", 0.00));
+          ctx.fillStyle = spark;
+          ctx.fillRect(0, 0, ctx.canvas.width, ctx.canvas.height);
+        }
+      }
+
+      ctx.globalCompositeOperation = "source-over";
+      return;
+    }
+  
+    // --- existing metallic brush for everything else (including gold spray) ---
+    const gain = variant === "drip" ? this.dripHighlightGain : 1.0;
+  
     // Base body
     const g0 = ctx.createRadialGradient(cx, cy, 0, cx, cy, radius);
-    g0.addColorStop(0.0, this._hexToRgba("#FFD700", 0.85 * gain)); // bright core
+    g0.addColorStop(0.0, this._hexToRgba("#FFD700", 0.85 * gain));
     g0.addColorStop(0.3, "#EAC677");
     g0.addColorStop(0.7, "#D4AF37");
     g0.addColorStop(1.0, this._hexToRgba("#B8860B", 1.0));
     ctx.fillStyle = g0;
     ctx.fillRect(0, 0, ctx.canvas.width, ctx.canvas.height);
-
-    // Highlight (reduced on drips)
-    const g1 = ctx.createRadialGradient(
-      cx * 0.72,
-      cy * 0.72,
-      0,
-      cx,
-      cy,
-      radius * 0.62
-    );
+  
+    // Highlight
+    const g1 = ctx.createRadialGradient(cx * 0.72, cy * 0.72, 0, cx, cy, radius * 0.62);
     g1.addColorStop(0.0, this._hexToRgba("#FFF8DC", 0.55 * gain));
     g1.addColorStop(0.4, this._hexToRgba("#FFD700", 0.45 * gain));
     g1.addColorStop(1.0, this._hexToRgba("#FFD700", 0.0));
     ctx.fillStyle = g1;
     ctx.fillRect(0, 0, ctx.canvas.width, ctx.canvas.height);
-
-    // Second reflection (very subtle)
-    const g2 = ctx.createRadialGradient(
-      cx * 1.2,
-      cy * 0.8,
-      0,
-      cx,
-      cy,
-      radius * 0.4
-    );
+  
+    // Second reflection
+    const g2 = ctx.createRadialGradient(cx * 1.2, cy * 0.8, 0, cx, cy, radius * 0.4);
     g2.addColorStop(0.0, this._hexToRgba("#FFFFFF", 0.2 * gain));
     g2.addColorStop(0.3, this._hexToRgba("#FFD700", 0.15 * gain));
     g2.addColorStop(1.0, this._hexToRgba("#FFD700", 0.0));
     ctx.fillStyle = g2;
     ctx.fillRect(0, 0, ctx.canvas.width, ctx.canvas.height);
-
-    // Subtle texture (same as yours; left as-is)
+  
     this.addMetallicNoise(ctx, cx, cy, radius);
   }
 
@@ -1310,70 +1345,70 @@ class SprayPaint {
   // --- 4) _updateDrips(dt) with TRAIL/HEAD/cap & frame max logs ---
   _updateDrips(dt) {
     if (!this.drips.length) return;
-
+  
     const ctx = this.ctx;
     const prevOp = ctx.globalCompositeOperation;
-    const dripOp = this.getDripCompositeMode();
+    const dripOp = this.getDripCompositeMode(); // gold => 'source-over'
+    this._drawingDrip = true;
     ctx.globalCompositeOperation = dripOp;
-
+  
     const isGold = this.isGoldColor(this.color);
-    const toneParity = isGold ? 0.92 : 1.0;
-
+  
+    // ---- Gold-specific visual tuning (balanced, not darker or lighter) ----
+    const TONE = 1.0;                            // no dimming for gold
+    const TRAIL_BASE = isGold ? 0.28 : 0.26;     // slightly higher so gold matches fill
+    const HEAD_BASE  = isGold ? 0.22 : 0.22;     // head opacity base
+    const SHEEN_TRAIL_ALPHA = isGold ? 0.015 : 0; // visible metallic lift on trail
+    const SHEEN_HEAD_ALPHA  = isGold ? 0.01 : 0; // slightly stronger on head
+    const SHEEN_OFFSET_F    = 0.35;              // highlight offset (fraction of radius)
+  
     for (let i = this.drips.length - 1; i >= 0; i--) {
       const d = this.drips[i];
       d.t += dt;
-
+  
       // physics
       d.gravityScale = 0.85 + Math.random() * 0.3;
       d.vy += this.GRAVITY * d.gravityScale * dt * (0.55 + 0.45 * d.vol);
       d.vy *= Math.exp(-this.VISCOSITY * dt);
-
+  
       d.py = d.y;
       d.y += d.vy * dt;
-
-      // --- Lateral wobble + hooked curvature ---
+  
+      // lateral wobble + hook
       const lenNorm = d.len / (d.len + 28);
       const wobbleEase = Math.min(1, Math.pow(lenNorm, 1.2));
       const wobble =
-        Math.sin(d.t * (3.0 * d.profile.wobbleF)) *
-        d.profile.wobbleA *
-        wobbleEase;
-
+        Math.sin(d.t * (3.0 * d.profile.wobbleF)) * d.profile.wobbleA * wobbleEase;
+  
       const hookGain =
-        this.TAIL_HOOK_STRENGTH *
-        d.profile.hookJ *
-        (0.6 + 0.4 * lenNorm * lenNorm);
-
-      const lateral =
-        wobble * dt + d.profile.hookDir * hookGain * lenNorm * dt * 22;
+        this.TAIL_HOOK_STRENGTH * d.profile.hookJ * (0.6 + 0.4 * lenNorm * lenNorm);
+  
+      const lateral = wobble * dt + d.profile.hookDir * hookGain * lenNorm * dt * 22;
       const maxSide = Math.min(10, 0.35 * d.len);
       d.x += Math.max(-maxSide, Math.min(maxSide, lateral));
-
+  
       const dy = d.y - d.py;
       d.len += Math.abs(dy);
-
-      // --- Draw trail ---
+  
+      // trail
       const stepPx = 1.0;
       const steps = Math.max(1, Math.floor(Math.abs(dy) / stepPx));
-      const aBase = 0.26 * d.vol * toneParity;
-
+      const aBase = TRAIL_BASE * d.vol * TONE;
+  
       for (let s = 1; s <= steps; s++) {
         const t = s / steps;
         const yy = d.py + dy * t;
-
+  
         const widen = Math.min(1.14, 1.0 + 0.0015 * d.len * d.profile.widenK);
         const capR = this.trailCapFor(d);
         const elongate = 1 + Math.min(0.4, d.len * 0.003);
         let rawR =
           d.baseR * elongate * (1.06 + 0.62 * d.vol) * widen * (1.0 + 0.12 * t);
-
-        // small shape noise
-        const n = this._smoothNoise1D(
-          d.profile.seed + d.len * 0.05 * d.profile.noiseF
-        );
-        const jitter = 1 + this.SHAPE_NOISE_AMP * (n - 0.5);
-        rawR *= jitter;
-
+  
+        // subtle radius noise
+        const n = this._smoothNoise1D(d.profile.seed + d.len * 0.05 * d.profile.noiseF);
+        rawR *= (1 + this.SHAPE_NOISE_AMP * (n - 0.5));
+  
         let R = rawR;
         if (rawR >= capR) {
           const overshoot = Math.min(1.0, (rawR - capR) / Math.max(1e-3, capR));
@@ -1381,67 +1416,86 @@ class SprayPaint {
           R = Math.min(R, capR - 0.25);
         }
         R = this._safeR(R);
-
+  
         const xx = d.x + (Math.random() - 0.5) * 0.4 * R;
         const nearCap = R / Math.max(1e-3, capR);
         const falloff = Math.max(0.35, 1 - 0.65 * nearCap * nearCap);
-        const alpha = Math.max(
-          0.05,
-          Math.min(0.2, aBase * (0.7 + 0.5 * t) * falloff)
-        );
-
+        const alpha = Math.max(0.05, Math.min(0.2, aBase * (0.7 + 0.5 * t) * falloff));
+  
+        // body
         ctx.globalAlpha = alpha;
         ctx.drawImage(this.getBrush(R), xx - R, yy - R);
-
-        // occasional thicker pool near upper trail
+  
+        // optional thicker pool near upper trail
         if (Math.random() < 0.05 && t < 0.25) {
           ctx.globalAlpha = Math.min(1, alpha * 1.5);
           const Rb = R * 1.2;
           ctx.drawImage(this.getBrush(Rb), xx - Rb, yy - Rb);
         }
-
+  
+        // metallic sheen (gold only): faint screen highlight offset up-left
+        if (SHEEN_TRAIL_ALPHA > 0) {
+          ctx.save();
+          ctx.globalCompositeOperation = "screen";
+          ctx.globalAlpha = SHEEN_TRAIL_ALPHA * (0.6 + 0.4 * (1 - t)); // a bit stronger near tail start
+          const off = R * SHEEN_OFFSET_F;
+          const Rs = R * 0.95;
+          ctx.drawImage(this.getBrush(Rs), (xx - Rs) - off, (yy - Rs) - off);
+          ctx.restore();
+        }
+  
+        // wetness for follow-on dynamics
         this._accumWet(xx, yy, alpha * 0.05);
       }
-
-      // --- Drip head ---
+  
+      // head
       const Rhead = this.headRadiusFor(d);
-      ctx.globalAlpha = Math.min(0.22, (0.16 + 0.1 * d.vol) * toneParity);
+      ctx.globalAlpha = Math.min(0.26, (HEAD_BASE + 0.1 * d.vol) * TONE);
       ctx.drawImage(this.getBrush(Rhead), d.x - Rhead, d.y - Rhead);
-
+  
+      // metallic sheen on head (gold only)
+      if (SHEEN_HEAD_ALPHA > 0) {
+        ctx.save();
+        ctx.globalCompositeOperation = "screen";
+        ctx.globalAlpha = SHEEN_HEAD_ALPHA;
+        const off = Rhead * (SHEEN_OFFSET_F + 0.1);
+        const Rs = Rhead * 1.06;
+        ctx.drawImage(this.getBrush(Rs), (d.x - Rs) - off, (d.y - Rs) - off);
+        ctx.restore();
+      }
+  
       // tiny flecks below the tip
       if (Math.random() < 0.12) {
         for (let k = 0; k < 3; k++) {
           const rr = 0.5 + Math.random();
           const xx2 = d.x + (Math.random() - 0.5) * Rhead * 2;
           const yy2 = d.y + (Math.random() + 0.2) * Rhead * 3;
-          ctx.globalAlpha = 0.05 * toneParity;
+          ctx.globalAlpha = 0.05;
           ctx.drawImage(this.getBrush(rr), xx2 - rr, yy2 - rr);
         }
       }
-
-      // life decay
-      d.vol -=
-        (this.DEPOSIT_PER_PX * Math.abs(dy)) / 60 + this.WET_EVAP * dt * 0.45;
-
-      // finish drip (tapered tip)
+  
+      // decay
+      d.vol -= (this.DEPOSIT_PER_PX * Math.abs(dy)) / 60 + this.WET_EVAP * dt * 0.45;
+  
+      // end-of-life taper
       if (d.vol <= 0.08 || d.len > 70 || d.y > this.canvas.height + 5) {
         this._currentDripProfile = d.profile;
         const taperTo = Math.max(0.8, d.baseR * d.profile.taperTo);
         this._drawTaperTip(
-          d.x,
-          d.y,
-          dy >= 0 ? 1 : -1,
+          d.x, d.y, dy >= 0 ? 1 : -1,
           Math.max(1.0, Rhead),
           taperTo,
           this.TAIL_CAP_STEPS,
-          0.14 * toneParity
+          0.14
         );
         this._currentDripProfile = null;
         this.drips.splice(i, 1);
         continue;
       }
     }
-
+  
+    this._drawingDrip = false;
     ctx.globalCompositeOperation = prevOp;
   }
   // game loop hook — call once after constructing the tool
