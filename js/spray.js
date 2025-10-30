@@ -51,7 +51,7 @@ class SprayPaint {
 
     // physics (seconds-based)
     this.DRIP_THRESHOLD = 0.59; // pooled paint needed at center cell
-    this.DRIP_HYST = 0.16; // local drain after spawn
+    this.DRIP_HYST = 0.24; // local drain after spawn
     this.GRAVITY = 500; // px/s^2
     this.VISCOSITY = 8.9; // s^-1 damping
     this.WET_EVAP = 0.18; // s^-1 evaporation from buffer
@@ -112,11 +112,11 @@ class SprayPaint {
     this.TAIL_CAP_STEPS = 7; // how many stamps to round the tip when a drip ends
 
     // per-location spawn throttling (ms); avoid multiple instant drips
-    this.MIN_SPAWN_INTERVAL_MS = 1300; // ~0.55s
+    this.MIN_SPAWN_INTERVAL_MS = 1800; // ~0.55s
     this._lastSpawnAt = new Uint32Array(this.paintBuf.length); // per-cell timestamp (ms)
 
     // optional: longer cell cooldown after a spawn (frames, decremented in loop)
-    this.SPAWN_COOLDOWN_FRAMES = 70; // ~0.6s @ ~60fps
+    this.SPAWN_COOLDOWN_FRAMES = 140; // ~0.6s @ ~60fps
 
     // --- extra randomness for drip shapes ---
     this.SHAPE_NOISE_AMP = 0.22; // 0..0.3 — how wobbly the radius gets along the trail
@@ -617,9 +617,6 @@ class SprayPaint {
       }
     }
 
-    if (speedRatio <= 1.5) {
-      // console.log(`🐌 Slow Movement - No extra stamps needed`);
-    }
   }
 
   stamp(x, y) {
@@ -675,131 +672,118 @@ class SprayPaint {
     }
   }
 
-  // --- Blue-noise-ish scatter with HiDPI brush, sub-pixel positions ---
-  createNoisyPath(x, y, size, speed = this.V_REF) {
-    const params = this.deriveSprayParams();
-    const { scatterRadius } = params;
+  // --- Blue-noise-ish scatter with HiDPI brush + small-nozzle smoothing ---
+  // --- Blue-noise scatter with HiDPI brush; small nozzles use denser/smaller dots ---
+createNoisyPath(x, y, size, speed = this.V_REF) {
+  const params = this.deriveSprayParams();
+  let { scatterRadius } = params;
 
-    // if you added speed-based thickness earlier, use it; otherwise 1.0
-    const thicknessK =
-      typeof this._getThicknessScale === "function"
-        ? this._getThicknessScale(speed)
-        : 1.0;
+  const thicknessK = (typeof this._getThicknessScale === "function")
+    ? this._getThicknessScale(speed)
+    : 1.0;
 
-    // dwell (already in your code) + thickness scaling
-    const dwell = Math.min(1, speed / this.V_REF); // 0..1
-    const spread = 1 + 0.35 * (1 - dwell);
-    const displayRadius =
-      Math.max(scatterRadius, size * 0.55) * spread * thicknessK;
+  const dwell = Math.min(1, speed / this.V_REF); // 0..1
+  const spread = 1 + 0.35 * (1 - dwell);
 
-    // density that breathes with footprint but avoids “too many dots”
-    const areaFactor =
-      (this.nozzleSize * this.nozzleSize) / (this.Dref * this.Dref);
-    const baseDots = 6.0 * areaFactor * this.flow;
-    const densityComp = 1 / Math.max(0.6, Math.min(1.6, thicknessK));
-    const MAX_DOTS = 1400;
+  const smallNozzle = this.nozzleSize < 20;
 
-    // Use golden-angle spiral with jitter → blue-noise-like randomness without clumps
-    // n ≈ proportional to area, then trimmed by MAX_DOTS.
-    let nDots = Math.min(
-      MAX_DOTS,
-      Math.floor(
-        displayRadius * baseDots * this.scatterAmountMultiplier * densityComp
-      )
-    );
-    if (nDots <= 0) return;
+  // pull the cloud slightly inward when small so it fills without a blob
+  if (smallNozzle) scatterRadius *= 0.86;
 
-    const phi = Math.PI * (3 - Math.sqrt(5)); // golden angle ~2.399963...
-    const baseOpacity = this.opacity;
-    const dotBaseR = Math.max(0.6, size * 0.005 * this.scatterSizeMultiplier); // a tad larger to avoid pixel steps
+  const displayRadius = Math.max(scatterRadius, size * 0.55) * spread * thicknessK;
 
-    const dpr = Math.max(1, window.devicePixelRatio || 1);
-    // global target smoothing on destination
-    this.ctx.imageSmoothingEnabled = true;
-    this.ctx.imageSmoothingQuality = "high";
+  // base density
+  const areaFactor = (this.nozzleSize * this.nozzleSize) / (this.Dref * this.Dref);
+  const baseDots = 6.0 * areaFactor * this.flow;
+  const densityComp = 1 / Math.max(0.6, Math.min(1.6, thicknessK));
+  const MAX_DOTS = 1600;
 
-    // Use a single save/restore for perf
-    this.ctx.save();
-    this.ctx.fillStyle = this.color;
+  let nDots = Math.min(
+    MAX_DOTS,
+    Math.floor(displayRadius * baseDots * this.scatterAmountMultiplier * densityComp)
+  );
 
-    // Per-stamp alpha baseline
-    // Slight compensation to keep tone stable when thick vs thin
-    const toneComp = Math.sqrt(1 / Math.max(0.6, Math.min(1.6, thicknessK)));
+  // *** small-nozzle tuning: more dots, smaller dots ***
+  if (smallNozzle) {
+    const minDots = 140 + Math.floor(displayRadius * 1.2); // denser floor
+    nDots = Math.max(minDots, nDots);
+  }
+  if (nDots <= 0) return;
 
-    // Emit dots on a spiral with jittered radius & angle
-    // r ~ sqrt(i/N) for uniform disk coverage, + small noise for randomness
-    const N = nDots;
-    const jitterR = 0.12; // radial jitter fraction
-    const jitterT = 0.35; // angular jitter (radians) scaled per sample
-    for (let i = 0; i < N; i++) {
-      // base polar position
-      const u = (i + 0.5) / N; // stratified 0..1
-      const r0 = Math.sqrt(u) * displayRadius;
-      const t0 = i * phi;
+  const phi = Math.PI * (3 - Math.sqrt(5)); // golden angle
+  const baseOpacity = this.opacity;
+  const dotBaseR = Math.max(0.45, size * 0.005 * this.scatterSizeMultiplier);
 
-      // add jitter (more jitter near center to avoid grid look)
-      const jr =
-        (Math.random() * 2 - 1) *
-        jitterR *
-        (0.6 + 0.4 * (1 - u)) *
-        displayRadius;
-      const jt = (Math.random() * 2 - 1) * jitterT * (0.35 + 0.65 * (1 - u));
+  // HiDPI smoothing
+  this.ctx.imageSmoothingEnabled = true;
+  this.ctx.imageSmoothingQuality = "high";
+  this.ctx.save();
+  this.ctx.fillStyle = this.color;
 
-      const r = Math.max(0, r0 + jr);
-      const t = t0 + jt;
+  const toneComp = Math.sqrt(1 / Math.max(0.6, Math.min(1.6, thicknessK)));
 
-      const dotX = x + Math.cos(t) * r;
-      const dotY = y + Math.sin(t) * r;
+  // jitter knobs (tighter when small)
+  const jitterR = smallNozzle ? 0.05 : 0.12;
+  const jitterT = smallNozzle ? 0.16 : 0.35;
 
-      // Grain size with your existing model, but minimum ~0.6px to avoid “pixel stair”
-      const rndSize = Math.max(
-        0.6,
-        this.calculateGrainSize(dotBaseR, size, params)
-      );
+  for (let i = 0; i < nDots; i++) {
+    // blue-noise-ish spiral with stratification
+    const u = (i + 0.5) / nDots;               // 0..1
+    const r0 = Math.sqrt(u) * displayRadius;   // uniform disk
+    const t0 = i * phi;
 
-      // Opacity using your model + tone compensation + dwell attenuation
-      let dotOpacity = this.calculateGrainOpacity(
-        baseOpacity,
-        rndSize / dotBaseR,
-        params
-      );
-      dotOpacity *= (0.35 + 0.65 * dwell) * toneComp;
+    // add tempered jitter (slightly more near center)
+    const jr = (Math.random() * 2 - 1) *
+               jitterR * (0.6 + 0.4 * (1 - u)) * displayRadius;
+    const jt = (Math.random() * 2 - 1) *
+               jitterT * (0.35 + 0.65 * (1 - u));
 
-      // Draw with HiDPI gradient brush at sub-pixel coordinates
-      const b = this.getBrush(rndSize);
-      this.ctx.globalAlpha = dotOpacity;
+    const r = Math.max(0, r0 + jr);
+    const t = t0 + jt;
 
-      // Add metallic shimmer for gold particles
-      if (
-        this.isGoldColor(this.color) &&
-        this.metallicShimmerSpray &&
-        Math.random() < 0.3
-      ) {
-        this.ctx.globalCompositeOperation = "screen";
-        this.ctx.drawImage(b, dotX - rndSize, dotY - rndSize);
-        this.ctx.globalCompositeOperation = "source-over";
-      }
+    const dotX = x + Math.cos(t) * r;
+    const dotY = y + Math.sin(t) * r;
 
-      this.ctx.drawImage(b, dotX - rndSize, dotY - rndSize);
+    // *** smaller grains when small nozzle ***
+    const minGrain = smallNozzle ? 0.45 : 0.6;
+    let rndSize = Math.max(minGrain, this.calculateGrainSize(dotBaseR, size, params));
+    if (smallNozzle) rndSize *= 0.9; // nudge smaller
 
-      // accumulate wetness sparsely for performance (every 4th dot)
-      if (i % 5 === 0) {
-        // scale wetness by size^2 and opacity, normalized by nozzle area
-        const normNozzleArea = Math.max(64, this.nozzleSize * this.nozzleSize);
-        const G = 60;
-        const wet =
-          ((G * dotOpacity * (rndSize * rndSize)) / normNozzleArea) *
-          (0.8 + 0.6 * this.pressure) *
-          this.flow;
+    // opacity with gentle center bias so core looks filled but not “blobbed”
+    let dotOpacity = this.calculateGrainOpacity(baseOpacity, rndSize / dotBaseR, params);
+    const centerBias = 1 - Math.pow(Math.min(1, r / Math.max(1e-3, displayRadius)), 1.35);
+    const smallBoost = smallNozzle ? (0.96 + 0.18 * centerBias) : 1.0;
+    dotOpacity *= (0.35 + 0.65 * dwell) * toneComp * smallBoost;
 
-        this._accumWet(dotX, dotY, wet, speed);
-        this._trySpawnDripAt(dotX, dotY, speed);
-      }
+    // draw
+    const b = this.getBrush(rndSize);
+    this.ctx.globalAlpha = dotOpacity;
+    this.ctx.drawImage(b, dotX - rndSize, dotY - rndSize);
+
+    // micro “dither” pair every ~6th dot to smooth tiny gaps (only when small)
+    if (smallNozzle && (i % 6 === 0)) {
+      const off = rndSize * 0.35;
+      const t2 = t + (Math.random() - 0.5) * 0.6;
+      const d2x = dotX + Math.cos(t2) * off;
+      const d2y = dotY + Math.sin(t2) * off;
+      const r2 = Math.max(minGrain, rndSize * (0.8 + Math.random() * 0.3));
+      this.ctx.globalAlpha = dotOpacity * 0.9;
+      this.ctx.drawImage(this.getBrush(r2), d2x - r2, d2y - r2);
     }
 
-    this.ctx.restore();
+    // accumulate wetness sparsely (every 4th dot; slightly stronger if small)
+    if ((i & 3) === 0) {
+      const normNozzleArea = Math.max(64, this.nozzleSize * this.nozzleSize);
+      const G = smallNozzle ? 115 : 100;
+      const wet = ((G * dotOpacity * (rndSize * rndSize)) / normNozzleArea) *
+                  (0.8 + 0.6 * this.pressure) * this.flow;
+      this._accumWet(dotX, dotY, wet, speed);
+      this._trySpawnDripAt(dotX, dotY, speed);
+    }
   }
 
+  this.ctx.restore();
+}
   // --- helper: draw a tiny "blobby" dot made of 1–4 overlapping sub-dots ---
   _drawDotCluster(cx, cy, baseR, tangentAngle = 0) {
     // choose 1–4 sub-dots; mostly 1–2 so shapes look like dots with slight lumps
@@ -1208,21 +1192,38 @@ class SprayPaint {
   // called occasionally from spraying to attempt spawning a drip
 
   // --- 3) _trySpawnDripAt(x,y,speed) with SPAWN / MERGE logs ---
+  // Attempt to spawn (or merge into) a drip near (x,y) given current draw speed
   _trySpawnDripAt(x, y, speed = this.V_REF) {
     if (!this.dripsEnabled) return;
-
+  
     const cx = (x / this.bufScale) | 0;
     const cy = (y / this.bufScale) | 0;
     if (cx < 0 || cy < 0 || cx >= this.bufW || cy >= this.bufH) return;
+  
     const idx = cy * this.bufW + cx;
-
     const now = performance.now();
-    const lastAt = this._lastSpawnAt[idx];
-    if (now - lastAt < this.MIN_SPAWN_INTERVAL_MS) return; // min 1.3s gap
-    if (this._spawnCooldown[idx] > 0) return;
-    if (speed > this.V_SLOW * 0.8) return;
-
-    // pooled wetness in 3×3 neighborhood
+  
+    const nozzle = Math.max(2, this.nozzleSize);
+  
+    // 🚫 --- Hard cutoff for movement ---
+    // When moving fast, skip entirely to prevent drip spawns.
+    if (speed > this.V_SLOW * 1.2) return; // <- absolute no-drip threshold
+    // optionally: also gently decay wetness while moving
+    if (speed > this.V_SLOW * 0.7) {
+      this.paintBuf[idx] *= 0.98; // light decay when sweeping
+      return;
+    }
+  
+    // --- Nozzle & speed-aware scaling ---
+    const smallNozScale = nozzle < 22
+      ? 1.35 - 0.35 * Math.min(1, (nozzle - 12) / 10)
+      : 1.0;
+  
+    const slowFactor = Math.min(1.6, this.V_SLOW / Math.max(20, speed));
+    const needCenter = this.DRIP_THRESHOLD * smallNozScale * slowFactor;
+    const needPool   = this.NBR_MIN       * smallNozScale * slowFactor;
+  
+    // --- Wetness sample in 3×3 area ---
     let pool = 0;
     for (let oy = -1; oy <= 1; oy++) {
       const yy = cy + oy;
@@ -1231,118 +1232,118 @@ class SprayPaint {
         const xx = cx + ox;
         if (xx < 0 || xx >= this.bufW) continue;
         const w = this.paintBuf[yy * this.bufW + xx];
-        pool += w * (ox === 0 && oy === 0 ? 1.0 : 0.65);
+        pool += w * (ox === 0 && oy === 0 ? 1.0 : 0.6);
       }
     }
+  
     const centerWet = this.paintBuf[idx];
-
-    // --- Soft threshold logic (smoother ramp-up) ---
-    const slowFactor =
-      speed < this.V_SLOW ? this.V_SLOW / Math.max(20, speed) : 1;
-    const needCenter = this.DRIP_THRESHOLD * Math.min(1.5, slowFactor);
-    const needPool = this.NBR_MIN * Math.min(1.5, slowFactor);
-
-    const centerRatio = centerWet / needCenter;
-    const poolRatio = pool / needPool;
-    const triggerScore = Math.min(1, 0.5 * centerRatio + 0.5 * poolRatio);
-
-    // Smooth sigmoid ramp to delay early spawn
-    const spawnProb = Math.pow(Math.max(0, triggerScore - 0.8), 2.8) * 5.2;
+    const trigger = 0.55 * (centerWet / needCenter) + 0.45 * (pool / needPool);
+  
+    // 🧮 --- Raise the knee a bit for more forgiveness ---
+    if (trigger < 0.94) return;
+  
+    // Hard clamp under motion
+    if (speed > this.V_SLOW * 0.5 && trigger < 1.1) return;
+  
+    const spawnProb = Math.pow(trigger - 0.94, 3.0) * 3.2;
     if (Math.random() > spawnProb) return;
-
-    // --- Find best spawn cell near center (bias toward center) ---
-    let bestIx = cx,
-      bestIy = cy,
-      bestScore = -Infinity;
-    for (let oy = -1; oy <= 1; oy++) {
+  
+    // --- Search bottom-centered region ---
+    const pickRadPx = nozzle * 0.55;
+    const pickRad = Math.max(1, Math.round(pickRadPx / this.bufScale));
+    const maxSide = Math.round(pickRad * 0.6);
+    let bestIx = cx, bestIy = cy, bestScore = -Infinity;
+  
+    for (let oy = 0; oy <= pickRad; oy++) {
       const yy = cy + oy;
       if (yy < 0 || yy >= this.bufH) continue;
-      for (let ox = -1; ox <= 1; ox++) {
+      for (let ox = -maxSide; ox <= maxSide; ox++) {
         const xx = cx + ox;
         if (xx < 0 || xx >= this.bufW) continue;
-        const dist2 = ox * ox + oy * oy;
-        const spatial = Math.exp(-dist2 * 0.9); // Gaussian falloff
         const w = this.paintBuf[yy * this.bufW + xx];
-        const score = spatial * w;
+        if (w <= 0) continue;
+  
+        const d2 = ox * ox + oy * oy;
+        const bias = Math.exp(-d2 * 0.25) * (1 + 0.6 * (oy / (pickRad + 1)));
+        const score = w * bias;
         if (score > bestScore) {
           bestScore = score;
-          bestIx = xx;
-          bestIy = yy;
+          bestIx = xx; bestIy = yy;
         }
       }
     }
-
-    const spawnX = (bestIx + 0.5) * this.bufScale;
-    const spawnY = (bestIy + 0.5) * this.bufScale;
-    const jitterX = (Math.random() - 0.5) * (Math.random() < 0.85 ? 1.6 : 3.0); // mostly centered
-    const jitterY = (Math.random() - 0.5) * (Math.random() < 0.85 ? 1.6 : 3.0);
-    const sx = spawnX + jitterX;
-    const sy = spawnY + jitterY;
-
-    // --- Merge nearby drips instead of new one ---
-    for (let j = this.drips.length - 1; j >= 0; j--) {
-      const d = this.drips[j];
-      if (
-        Math.abs(d.x - sx) < this.MIN_DRIP_SPACING &&
-        Math.abs(d.y - sy) < this.MIN_DRIP_SPACING * 0.8
-      ) {
-        const addVol = Math.min(0.45 * (1 + (pool - this.DRIP_THRESHOLD)), 1.2);
-        const addBaseR = Math.max(2.0, d.baseR * 0.92);
-        this._mergeIntoDrip(d, addBaseR, addVol);
-        this._spawnCooldown[idx] = this.SPAWN_COOLDOWN_FRAMES * 2;
-        this._lastSpawnAt[idx] = now;
-        return;
+  
+    if (bestScore <= 0) return;
+  
+    // --- Neighborhood gate ---
+    const areaRad = Math.max(1, Math.round((nozzle * 0.6) / this.bufScale));
+    let tooSoon = false;
+    for (let oy = -areaRad; oy <= areaRad && !tooSoon; oy++) {
+      for (let ox = -areaRad; ox <= areaRad; ox++) {
+        const yy = bestIy + oy, xx = bestIx + ox;
+        if (xx < 0 || yy < 0 || xx >= this.bufW || yy >= this.bufH) continue;
+        const k = yy * this.bufW + xx;
+        if (this._spawnCooldown[k] > 0) { tooSoon = true; break; }
+        const last = this._lastSpawnAt[k] || 0;
+        if (now - last < this.MIN_SPAWN_INTERVAL_MS) { tooSoon = true; break; }
       }
     }
-
-    // drain & capacity check
-    this.paintBuf[idx] = Math.max(0, centerWet - this.DRIP_HYST);
-    if (this.drips.length >= this.MAX_DRIPS) return;
-
+    if (tooSoon) return;
+  
+    // --- Compute spawn pos (small jitter, bottom bias) ---
+    const spawnX = (bestIx + 0.5) * this.bufScale;
+    const spawnY = (bestIy + 0.5) * this.bufScale;
+    const jx = (Math.random() - 0.5) * (nozzle * 0.04);
+    const jy = Math.random() * (nozzle * 0.06);
+    const sx = spawnX + jx;
+    const sy = spawnY + jy;
+  
+    // --- Create the drip ---
     const areaScore = Math.max(0, pool - this.DRIP_THRESHOLD);
-    const slowClamp =
-      speed < this.V_SLOW ? 0.75 + 0.25 * (speed / this.V_SLOW) : 1;
-    const vol = Math.min(1.6 * slowClamp, 0.6 + 1.2 * areaScore);
-    const baseR = Math.max(
-      2.6,
-      (1.6 + 0.9 * Math.sqrt(areaScore + 0.01) + (this.nozzleSize / 48) * 0.7) *
-        slowClamp
-    );
-
+    const vol   = Math.min(1.3, 0.5 + 0.9 * areaScore);
+    const baseR = Math.max(2.0, (1.8 + 0.8 * Math.sqrt(areaScore + 0.01)) * (nozzle / 32));
+  
     this.drips.push({
-      x: sx,
-      y: sy,
-      px: sx,
-      py: sy,
-      vy: 0,
-      vol,
-      baseR,
-      len: 0,
-      life: 1.0,
-      t: 0,
+      x: sx, y: sy, px: sx, py: sy, vy: 0,
+      vol, baseR, len: 0, life: 1.0, t: 0,
       profile: {
-        wobbleF: 0.5 + Math.random() * 1.2,
+        wobbleF: 0.6 + Math.random() * 1.0,
         wobbleA: this.LATERAL_SPREAD * (0.4 + Math.random() * 1.0),
-        hookJ: 0.65 + Math.random() * 0.7,
+        hookJ:   0.6 + Math.random() * 0.6,
         hookDir: Math.random() < 0.5 ? -1 : 1,
-        widenK: 1.02 + Math.random() * 0.2,
-        seed: Math.random() * 1000,
-        noiseF:
-          this.SHAPE_NOISE_FREQ[0] +
-          Math.random() * (this.SHAPE_NOISE_FREQ[1] - this.SHAPE_NOISE_FREQ[0]),
-        taperTo:
-          this.TAIL_TAPER_MIN +
-          Math.random() * (this.TAIL_TAPER_MAX - this.TAIL_TAPER_MIN),
-        bead: Math.random() < this.TAIL_BEAD_CHANCE,
+        widenK:  1.02 + Math.random() * 0.2,
+        seed:    Math.random() * 1000,
+        noiseF:  this.SHAPE_NOISE_FREQ[0] +
+                 Math.random() * (this.SHAPE_NOISE_FREQ[1] - this.SHAPE_NOISE_FREQ[0]),
+        taperTo: this.TAIL_TAPER_MIN +
+                 Math.random() * (this.TAIL_TAPER_MAX - this.TAIL_TAPER_MIN),
+        bead:    Math.random() < this.TAIL_BEAD_CHANCE,
       },
     });
-
-    // cooldowns
-    this._spawnCooldown[idx] = this.SPAWN_COOLDOWN_FRAMES * 2; // 1.2s cooldown
-    this._lastSpawnAt[idx] = now;
+  
+    // --- Neighborhood drain + cooldown ---
+    const drainRad = Math.max(1, Math.round((nozzle * 0.4) / this.bufScale));
+    for (let oy = -drainRad; oy <= drainRad; oy++) {
+      for (let ox = -drainRad; ox <= drainRad; ox++) {
+        const yy = bestIy + oy, xx = bestIx + ox;
+        if (xx < 0 || yy < 0 || xx >= this.bufW || yy >= this.bufH) continue;
+        const rr2 = ox * ox + oy * oy;
+        if (rr2 > drainRad * drainRad) continue;
+        const k = yy * this.bufW + xx;
+        const fall = 0.5 + 0.5 * (1 - rr2 / (drainRad * drainRad));
+        this.paintBuf[k] = Math.max(0, this.paintBuf[k] - this.DRIP_HYST * fall);
+        this._spawnCooldown[k] = this.SPAWN_COOLDOWN_FRAMES * 2;
+        this._lastSpawnAt[k] = now;
+      }
+    }
+  
+    console.log(
+      `[DRIP-SPAWN] t=${now.toFixed(1)}ms at (x=${sx.toFixed(1)}, y=${sy.toFixed(1)})` +
+      ` pool=${pool.toFixed(2)} trigger=${trigger.toFixed(2)} nozzle=${nozzle} speed=${speed.toFixed(1)}`
+    );
   }
 
-  // --- 4) _updateDrips(dt) with TRAIL/HEAD/cap & frame max logs ---
+// --- 4) _updateDrips(dt) with TRAIL/HEAD/cap & frame max logs ---
   _updateDrips(dt) {
     if (!this.drips.length) return;
   
@@ -1498,9 +1499,9 @@ class SprayPaint {
     this._drawingDrip = false;
     ctx.globalCompositeOperation = prevOp;
   }
+
   // game loop hook — call once after constructing the tool
   startDripLoop() {
-    console.log(`🚀 Starting drip simulation loop`);
     const tick = (t) => {
       const dt = Math.min(0.05, (t - this._lastT) / 1000); // seconds, clamp 50ms
       this._lastT = t;
@@ -1545,11 +1546,6 @@ class SprayPaint {
       this.GLOBAL_TRAIL_CAP * 0.9
     );
     const R = Math.max(1.0, Math.min(raw, cap));
-    console.log(
-      `HEAD id=? Rhead=${R.toFixed(2)} baseR=${d.baseR.toFixed(
-        2
-      )} vol=${d.vol.toFixed(2)}`
-    );
     return R;
   }
 
@@ -1575,14 +1571,6 @@ class SprayPaint {
 
     target.vol = vol;
     target.baseR = newBase;
-
-    console.log(
-      `MERGE into id=? newVol=${vol.toFixed(2)} newBaseR=${newBase.toFixed(
-        2
-      )} (from base=${oldBase.toFixed(2)}, vol=${oldVol.toFixed(
-        2
-      )} + ${addVol.toFixed(2)})`
-    );
   }
 
   _drawTaperTip(x, y, dirY, Rstart, taperTo, steps, alphaBase = 0.16) {
