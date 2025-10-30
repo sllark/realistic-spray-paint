@@ -935,16 +935,25 @@ class StencilApp {
       return; // don't start spraying on the same click that selects
     }
     // start spraying (empty area or already-selected)
+    // Before we begin a new stroke: if there are pending drips on the stroke layer,
+    // bake them to the paint layer so clearing doesn't truncate them.
+    if (this.spray && this.spray._strokeDirty) {
+      try {
+        this.compositeStroke();
+        this.strokeCtx.clearRect(
+          0,
+          0,
+          this.strokeCanvas.width,
+          this.strokeCanvas.height
+        );
+        this.spray._strokeDirty = false;
+      } catch (_) {}
+    }
     // Deselect any current selection when starting to paint
     if (!hit || (hit && this.selectedIds.has(hit.id))) {
       this.selectOnly(null);
     }
-    this.strokeCtx.clearRect(
-      0,
-      0,
-      this.strokeCanvas.width,
-      this.strokeCanvas.height
-    );
+    // No unconditional clear here; we already baked + cleared if needed above
     this.spray.startDrawing(x, y, 1.0);
   }
 
