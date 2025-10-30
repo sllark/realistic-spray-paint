@@ -124,9 +124,9 @@ class SprayPaint {
     this.TAIL_HOOK_STRENGTH = 0.6; // 0..1 — curvature of the tail (randomized per drip)
     this.TAIL_BEAD_CHANCE = 0.35; // 0..1 — chance of a tiny bead at the very tip
 
-    this.GOLD_DRIP_ALPHA_GAIN = 1.12;   // +12% density for gold drips
-    this.GOLD_GLAZE = 0.26;             // strength of warm multiply glaze
-    this.metallicShimmerDrip = true;    // enable subtle metallic shimmer on drips
+    this.GOLD_DRIP_ALPHA_GAIN = 1.12; // +12% density for gold drips
+    this.GOLD_GLAZE = 0.26; // strength of warm multiply glaze
+    this.metallicShimmerDrip = true; // enable subtle metallic shimmer on drips
   }
 
   setColor(color) {
@@ -186,102 +186,104 @@ class SprayPaint {
   }
 
   // Draw one drip stamp. Gold gets extra metallic passes.
-// Keeps spray brushes untouched (no effect on dot density).
-// --- Replace the whole helper with this version ---
-// Matches the spray's metallic recipe: warm multiply + two screened lobes.
-// Only runs for gold; keeps stamp density unchanged.
-_stampDrip(R, x, y, alpha) {
-  const ctx = this.ctx;
+  // Keeps spray brushes untouched (no effect on dot density).
+  // --- Replace the whole helper with this version ---
+  // Matches the spray's metallic recipe: warm multiply + two screened lobes.
+  // Only runs for gold; keeps stamp density unchanged.
+  _stampDrip(R, x, y, alpha) {
+    const ctx = this.ctx;
 
-  // 0) Base body (identical tone as paint)
-  ctx.globalCompositeOperation = "source-over";
-  ctx.globalAlpha = alpha;
-  ctx.drawImage(this.getBrush(R), x - R, y - R);
+    // 0) Base body (identical tone as paint)
+    ctx.globalCompositeOperation = "source-over";
+    ctx.globalAlpha = alpha;
+    ctx.drawImage(this.getBrush(R), x - R, y - R);
 
-  if (!this.isGoldColor(this.color)) return;
+    if (!this.isGoldColor(this.color)) return;
 
-  // Tunables (tight link to spray look)
-  const GLZ   = 0.14;   // warm glaze strength (0.08–0.14)
-  const SH1   = 0.13;   // primary highlight (0.04–0.08)
-  const SH2   = 0.035;  // secondary reflection (0.02–0.05)
-  const OFF1  = 0.34;   // primary highlight offset (fraction of R)
-  const OFF2  = 0.70;   // secondary highlight offset
-  const SHR   = 0.86;   // highlight radius scale
-  const SHR2  = 0.55;   // second lobe radius scale
+    // Tunables (tight link to spray look)
+    const GLZ = 0.14; // warm glaze strength (0.08–0.14)
+    const SH1 = 0.13; // primary highlight (0.04–0.08)
+    const SH2 = 0.035; // secondary reflection (0.02–0.05)
+    const OFF1 = 0.34; // primary highlight offset (fraction of R)
+    const OFF2 = 0.7; // secondary highlight offset
+    const SHR = 0.86; // highlight radius scale
+    const SHR2 = 0.55; // second lobe radius scale
 
-  // 1) Warm mid-tone multiply glaze (deepens like the spray core)
-  ctx.save();
-  ctx.globalCompositeOperation = "multiply";
-  ctx.globalAlpha = GLZ;
-  ctx.drawImage(this.getBrush(R), x - R, y - R);
-  ctx.restore();
+    // 1) Warm mid-tone multiply glaze (deepens like the spray core)
+    ctx.save();
+    ctx.globalCompositeOperation = "multiply";
+    ctx.globalAlpha = GLZ;
+    ctx.drawImage(this.getBrush(R), x - R, y - R);
+    ctx.restore();
 
-  // Light comes from up-left (same as brush layout in createMetallicBrush)
-  const offX1 = R * OFF1, offY1 = R * OFF1;   // up-left
-  const offX2 = R * OFF2, offY2 = R * 0.10;   // slight lateral second lobe
+    // Light comes from up-left (same as brush layout in createMetallicBrush)
+    const offX1 = R * OFF1,
+      offY1 = R * OFF1; // up-left
+    const offX2 = R * OFF2,
+      offY2 = R * 0.1; // slight lateral second lobe
 
-  // 2) Primary specular lobe (screen)
-  ctx.save();
-  ctx.globalCompositeOperation = "screen";
-  ctx.globalAlpha = SH1;
-  const R1 = Math.max(0.7, R * SHR);
-  ctx.drawImage(this.getBrush(R1), (x - R1) - offX1, (y - R1) - offY1);
-  ctx.restore();
-
-  // 3) Secondary reflection (screen, smaller & fainter)
-  ctx.save();
-  ctx.globalCompositeOperation = "screen";
-  ctx.globalAlpha = SH2;
-  const R2 = Math.max(0.5, R * SHR2);
-  ctx.drawImage(this.getBrush(R2), (x - R2) + offX2, (y - R2) - offY2);
-  ctx.restore();
-
-  // 4) Tiny micro-sparkle (rare + very faint; avoids glitter)
-  if (Math.random() < 0.08) {
+    // 2) Primary specular lobe (screen)
     ctx.save();
     ctx.globalCompositeOperation = "screen";
-    const Rs = Math.max(0.45, R * (0.42 + Math.random() * 0.2));
-    const jx = (Math.random() - 0.3) * R * 0.22;
-    const jy = (Math.random() - 0.6) * R * 0.22;
-    ctx.globalAlpha = 0.02;
-    ctx.drawImage(this.getBrush(Rs), (x + jx) - Rs, (y + jy) - Rs);
+    ctx.globalAlpha = SH1;
+    const R1 = Math.max(0.7, R * SHR);
+    ctx.drawImage(this.getBrush(R1), x - R1 - offX1, y - R1 - offY1);
     ctx.restore();
+
+    // 3) Secondary reflection (screen, smaller & fainter)
+    ctx.save();
+    ctx.globalCompositeOperation = "screen";
+    ctx.globalAlpha = SH2;
+    const R2 = Math.max(0.5, R * SHR2);
+    ctx.drawImage(this.getBrush(R2), x - R2 + offX2, y - R2 - offY2);
+    ctx.restore();
+
+    // 4) Tiny micro-sparkle (rare + very faint; avoids glitter)
+    if (Math.random() < 0.08) {
+      ctx.save();
+      ctx.globalCompositeOperation = "screen";
+      const Rs = Math.max(0.45, R * (0.42 + Math.random() * 0.2));
+      const jx = (Math.random() - 0.3) * R * 0.22;
+      const jy = (Math.random() - 0.6) * R * 0.22;
+      ctx.globalAlpha = 0.02;
+      ctx.drawImage(this.getBrush(Rs), x + jx - Rs, y + jy - Rs);
+      ctx.restore();
+    }
   }
-}
 
-// Convenience wrapper so the drip code is clean
-_stampDripAt(R, xx, yy, alpha) {
-  this._stampDrip(R, xx, yy, alpha);
-}
+  // Convenience wrapper so the drip code is clean
+  _stampDripAt(R, xx, yy, alpha) {
+    this._stampDrip(R, xx, yy, alpha);
+  }
 
-// Lightweight, cached specular brush for gold (pure highlight, no color shift)
-getGoldSpecBrush(radius) {
-  const R = Math.max(1, Math.round(radius * 2) / 2);
-  const dpr = Math.max(1, window.devicePixelRatio || 1);
-  const key = `gold-spec-${R}-${dpr}`;
-  if (this.stampCache.has(key)) return this.stampCache.get(key);
+  // Lightweight, cached specular brush for gold (pure highlight, no color shift)
+  getGoldSpecBrush(radius) {
+    const R = Math.max(1, Math.round(radius * 2) / 2);
+    const dpr = Math.max(1, window.devicePixelRatio || 1);
+    const key = `gold-spec-${R}-${dpr}`;
+    if (this.stampCache.has(key)) return this.stampCache.get(key);
 
-  const px = Math.ceil(R * 2 * dpr);
-  const c = document.createElement("canvas");
-  c.width = c.height = Math.max(2, px);
+    const px = Math.ceil(R * 2 * dpr);
+    const c = document.createElement("canvas");
+    c.width = c.height = Math.max(2, px);
 
-  const g = c.getContext("2d", { alpha: true });
-  g.imageSmoothingEnabled = true;
-  g.imageSmoothingQuality = "high";
+    const g = c.getContext("2d", { alpha: true });
+    g.imageSmoothingEnabled = true;
+    g.imageSmoothingQuality = "high";
 
-  const rr = R * dpr;
-  // bright center → quick falloff, neutral white/yellow for screen blending
-  const spec = g.createRadialGradient(rr, rr, 0, rr, rr, rr);
-  spec.addColorStop(0.00, "rgba(255,255,255,1.0)");
-  spec.addColorStop(0.30, "rgba(255,244,200,0.8)");
-  spec.addColorStop(0.75, "rgba(255,215,0,0.20)");
-  spec.addColorStop(1.00, "rgba(255,215,0,0.00)");
-  g.fillStyle = spec;
-  g.fillRect(0, 0, c.width, c.height);
+    const rr = R * dpr;
+    // bright center → quick falloff, neutral white/yellow for screen blending
+    const spec = g.createRadialGradient(rr, rr, 0, rr, rr, rr);
+    spec.addColorStop(0.0, "rgba(255,255,255,1.0)");
+    spec.addColorStop(0.3, "rgba(255,244,200,0.8)");
+    spec.addColorStop(0.75, "rgba(255,215,0,0.20)");
+    spec.addColorStop(1.0, "rgba(255,215,0,0.00)");
+    g.fillStyle = spec;
+    g.fillRect(0, 0, c.width, c.height);
 
-  this.stampCache.set(key, c);
-  return c;
-}
+    this.stampCache.set(key, c);
+    return c;
+  }
 
   // Drip control methods
   setDripThreshold(threshold) {
@@ -394,17 +396,18 @@ getGoldSpecBrush(radius) {
 
   // variant: "spray" | "drip"
   createMetallicBrush(ctx, radius, baseRadius, dpr, variant = "spray") {
-    const cx = radius, cy = radius;
-  
+    const cx = radius,
+      cy = radius;
+
     // --- GOLD DRIP: match gold spray hue and density ---
     if (this.isGoldColor(this.color) && variant === "drip") {
       const gold = "#EAC677";
 
       // Body gradient (same hue as spray but with enough core density)
       const g = ctx.createRadialGradient(cx, cy, 0, cx, cy, radius);
-      g.addColorStop(0.00, this._hexToRgba(gold, 1.00));
-      g.addColorStop(this.softness * 0.80, this._hexToRgba(gold, 0.95));
-      g.addColorStop(1.00, this._hexToRgba(gold, 0.10));
+      g.addColorStop(0.0, this._hexToRgba(gold, 1.0));
+      g.addColorStop(this.softness * 0.8, this._hexToRgba(gold, 0.95));
+      g.addColorStop(1.0, this._hexToRgba(gold, 0.1));
       ctx.fillStyle = g;
       ctx.fillRect(0, 0, ctx.canvas.width, ctx.canvas.height);
 
@@ -420,18 +423,32 @@ getGoldSpecBrush(radius) {
       if (this.metallicShimmerDrip) {
         ctx.globalCompositeOperation = "screen";
         // narrow off-center highlight band
-        const band = ctx.createRadialGradient(cx * 0.78, cy * 0.72, 0, cx, cy, radius * 0.62);
-        band.addColorStop(0.00, this._hexToRgba("#FFF8DC", 0.06));
+        const band = ctx.createRadialGradient(
+          cx * 0.78,
+          cy * 0.72,
+          0,
+          cx,
+          cy,
+          radius * 0.62
+        );
+        band.addColorStop(0.0, this._hexToRgba("#FFF8DC", 0.06));
         band.addColorStop(0.45, this._hexToRgba("#FFD700", 0.04));
-        band.addColorStop(1.00, this._hexToRgba("#FFD700", 0.00));
+        band.addColorStop(1.0, this._hexToRgba("#FFD700", 0.0));
         ctx.fillStyle = band;
         ctx.fillRect(0, 0, ctx.canvas.width, ctx.canvas.height);
 
         // a few micro sparkles (very faint, avoids glittery look)
         if (Math.random() < 0.5) {
-          const spark = ctx.createRadialGradient(cx * 1.05, cy * 0.9, 0, cx, cy, radius * 0.35);
-          spark.addColorStop(0.00, this._hexToRgba("#FFFFFF", 0.025));
-          spark.addColorStop(1.00, this._hexToRgba("#FFFFFF", 0.00));
+          const spark = ctx.createRadialGradient(
+            cx * 1.05,
+            cy * 0.9,
+            0,
+            cx,
+            cy,
+            radius * 0.35
+          );
+          spark.addColorStop(0.0, this._hexToRgba("#FFFFFF", 0.025));
+          spark.addColorStop(1.0, this._hexToRgba("#FFFFFF", 0.0));
           ctx.fillStyle = spark;
           ctx.fillRect(0, 0, ctx.canvas.width, ctx.canvas.height);
         }
@@ -440,10 +457,10 @@ getGoldSpecBrush(radius) {
       ctx.globalCompositeOperation = "source-over";
       return;
     }
-  
+
     // --- existing metallic brush for everything else (including gold spray) ---
     const gain = variant === "drip" ? this.dripHighlightGain : 1.0;
-  
+
     // Base body
     const g0 = ctx.createRadialGradient(cx, cy, 0, cx, cy, radius);
     g0.addColorStop(0.0, this._hexToRgba("#FFD700", 0.85 * gain));
@@ -452,23 +469,37 @@ getGoldSpecBrush(radius) {
     g0.addColorStop(1.0, this._hexToRgba("#B8860B", 1.0));
     ctx.fillStyle = g0;
     ctx.fillRect(0, 0, ctx.canvas.width, ctx.canvas.height);
-  
+
     // Highlight
-    const g1 = ctx.createRadialGradient(cx * 0.72, cy * 0.72, 0, cx, cy, radius * 0.62);
+    const g1 = ctx.createRadialGradient(
+      cx * 0.72,
+      cy * 0.72,
+      0,
+      cx,
+      cy,
+      radius * 0.62
+    );
     g1.addColorStop(0.0, this._hexToRgba("#FFF8DC", 0.55 * gain));
     g1.addColorStop(0.4, this._hexToRgba("#FFD700", 0.45 * gain));
     g1.addColorStop(1.0, this._hexToRgba("#FFD700", 0.0));
     ctx.fillStyle = g1;
     ctx.fillRect(0, 0, ctx.canvas.width, ctx.canvas.height);
-  
+
     // Second reflection
-    const g2 = ctx.createRadialGradient(cx * 1.2, cy * 0.8, 0, cx, cy, radius * 0.4);
+    const g2 = ctx.createRadialGradient(
+      cx * 1.2,
+      cy * 0.8,
+      0,
+      cx,
+      cy,
+      radius * 0.4
+    );
     g2.addColorStop(0.0, this._hexToRgba("#FFFFFF", 0.2 * gain));
     g2.addColorStop(0.3, this._hexToRgba("#FFD700", 0.15 * gain));
     g2.addColorStop(1.0, this._hexToRgba("#FFD700", 0.0));
     ctx.fillStyle = g2;
     ctx.fillRect(0, 0, ctx.canvas.width, ctx.canvas.height);
-  
+
     this.addMetallicNoise(ctx, cx, cy, radius);
   }
 
@@ -714,7 +745,6 @@ getGoldSpecBrush(radius) {
         this.stamp(stampX + jitterX, stampY + jitterY);
       }
     }
-
   }
 
   stamp(x, y) {
@@ -772,116 +802,133 @@ getGoldSpecBrush(radius) {
 
   // --- Blue-noise-ish scatter with HiDPI brush + small-nozzle smoothing ---
   // --- Blue-noise scatter with HiDPI brush; small nozzles use denser/smaller dots ---
-createNoisyPath(x, y, size, speed = this.V_REF) {
-  const params = this.deriveSprayParams();
-  let { scatterRadius } = params;
+  createNoisyPath(x, y, size, speed = this.V_REF) {
+    const params = this.deriveSprayParams();
+    let { scatterRadius } = params;
 
-  const thicknessK = (typeof this._getThicknessScale === "function")
-    ? this._getThicknessScale(speed)
-    : 1.0;
+    const thicknessK =
+      typeof this._getThicknessScale === "function"
+        ? this._getThicknessScale(speed)
+        : 1.0;
 
-  const dwell = Math.min(1, speed / this.V_REF); // 0..1
-  const spread = 1 + 0.35 * (1 - dwell);
+    const dwell = Math.min(1, speed / this.V_REF); // 0..1
+    const spread = 1 + 0.35 * (1 - dwell);
 
-  const smallNozzle = this.nozzleSize < 20;
+    const smallNozzle = this.nozzleSize < 20;
 
-  // pull the cloud slightly inward when small so it fills without a blob
-  if (smallNozzle) scatterRadius *= 0.86;
+    // pull the cloud slightly inward when small so it fills without a blob
+    if (smallNozzle) scatterRadius *= 0.86;
 
-  const displayRadius = Math.max(scatterRadius, size * 0.55) * spread * thicknessK;
+    const displayRadius =
+      Math.max(scatterRadius, size * 0.55) * spread * thicknessK;
 
-  // base density
-  const areaFactor = (this.nozzleSize * this.nozzleSize) / (this.Dref * this.Dref);
-  const baseDots = 6.0 * areaFactor * this.flow;
-  const densityComp = 1 / Math.max(0.6, Math.min(1.6, thicknessK));
-  const MAX_DOTS = 1400;
+    // base density
+    const areaFactor =
+      (this.nozzleSize * this.nozzleSize) / (this.Dref * this.Dref);
+    const baseDots = 6.0 * areaFactor * this.flow;
+    const densityComp = 1 / Math.max(0.6, Math.min(1.6, thicknessK));
+    const MAX_DOTS = 1400;
 
-  let nDots = Math.min(
-    MAX_DOTS,
-    Math.floor(displayRadius * baseDots * this.scatterAmountMultiplier * densityComp)
-  );
+    let nDots = Math.min(
+      MAX_DOTS,
+      Math.floor(
+        displayRadius * baseDots * this.scatterAmountMultiplier * densityComp
+      )
+    );
 
-  // *** small-nozzle tuning: more dots, smaller dots ***
-  if (smallNozzle) {
-    const minDots = 70 + Math.floor(displayRadius * 1.2); // denser floor
-    nDots = Math.max(minDots, nDots);
-  }
-  if (nDots <= 0) return;
+    // *** small-nozzle tuning: more dots, smaller dots ***
+    if (smallNozzle) {
+      const minDots = 70 + Math.floor(displayRadius * 1.2); // denser floor
+      nDots = Math.max(minDots, nDots);
+    }
+    if (nDots <= 0) return;
 
-  const phi = Math.PI * (3 - Math.sqrt(5)); // golden angle
-  const baseOpacity = this.opacity;
-  const dotBaseR = Math.max(0.45, size * 0.005 * this.scatterSizeMultiplier);
+    const phi = Math.PI * (3 - Math.sqrt(5)); // golden angle
+    const baseOpacity = this.opacity;
+    const dotBaseR = Math.max(0.45, size * 0.005 * this.scatterSizeMultiplier);
 
-  // HiDPI smoothing
-  this.ctx.imageSmoothingEnabled = true;
-  this.ctx.imageSmoothingQuality = "high";
-  this.ctx.save();
-  this.ctx.fillStyle = this.color;
+    // HiDPI smoothing
+    this.ctx.imageSmoothingEnabled = true;
+    this.ctx.imageSmoothingQuality = "high";
+    this.ctx.save();
+    this.ctx.fillStyle = this.color;
 
-  const toneComp = Math.sqrt(1 / Math.max(0.6, Math.min(1.6, thicknessK)));
+    const toneComp = Math.sqrt(1 / Math.max(0.6, Math.min(1.6, thicknessK)));
 
-  // jitter knobs (tighter when small)
-  const jitterR = smallNozzle ? 0.05 : 0.12;
-  const jitterT = smallNozzle ? 0.16 : 0.35;
+    // jitter knobs (tighter when small)
+    const jitterR = smallNozzle ? 0.05 : 0.12;
+    const jitterT = smallNozzle ? 0.16 : 0.35;
 
-  for (let i = 0; i < nDots; i++) {
-    // blue-noise-ish spiral with stratification
-    const u = (i + 0.5) / nDots;               // 0..1
-    const r0 = Math.sqrt(u) * displayRadius;   // uniform disk
-    const t0 = i * phi;
+    for (let i = 0; i < nDots; i++) {
+      // blue-noise-ish spiral with stratification
+      const u = (i + 0.5) / nDots; // 0..1
+      const r0 = Math.sqrt(u) * displayRadius; // uniform disk
+      const t0 = i * phi;
 
-    // add tempered jitter (slightly more near center)
-    const jr = (Math.random() * 2 - 1) *
-               jitterR * (0.6 + 0.4 * (1 - u)) * displayRadius;
-    const jt = (Math.random() * 2 - 1) *
-               jitterT * (0.35 + 0.65 * (1 - u));
+      // add tempered jitter (slightly more near center)
+      const jr =
+        (Math.random() * 2 - 1) *
+        jitterR *
+        (0.6 + 0.4 * (1 - u)) *
+        displayRadius;
+      const jt = (Math.random() * 2 - 1) * jitterT * (0.35 + 0.65 * (1 - u));
 
-    const r = Math.max(0, r0 + jr);
-    const t = t0 + jt;
+      const r = Math.max(0, r0 + jr);
+      const t = t0 + jt;
 
-    const dotX = x + Math.cos(t) * r;
-    const dotY = y + Math.sin(t) * r;
+      const dotX = x + Math.cos(t) * r;
+      const dotY = y + Math.sin(t) * r;
 
-    // *** smaller grains when small nozzle ***
-    const minGrain = smallNozzle ? 0.45 : 0.6;
-    let rndSize = Math.max(minGrain, this.calculateGrainSize(dotBaseR, size, params));
-    if (smallNozzle) rndSize *= 0.9; // nudge smaller
+      // *** smaller grains when small nozzle ***
+      const minGrain = smallNozzle ? 0.45 : 0.6;
+      let rndSize = Math.max(
+        minGrain,
+        this.calculateGrainSize(dotBaseR, size, params)
+      );
+      if (smallNozzle) rndSize *= 0.9; // nudge smaller
 
-    // opacity with gentle center bias so core looks filled but not “blobbed”
-    let dotOpacity = this.calculateGrainOpacity(baseOpacity, rndSize / dotBaseR, params);
-    const centerBias = 1 - Math.pow(Math.min(1, r / Math.max(1e-3, displayRadius)), 1.35);
-    const smallBoost = smallNozzle ? (0.96 + 0.18 * centerBias) : 1.0;
-    dotOpacity *= (0.35 + 0.65 * dwell) * toneComp * smallBoost;
+      // opacity with gentle center bias so core looks filled but not “blobbed”
+      let dotOpacity = this.calculateGrainOpacity(
+        baseOpacity,
+        rndSize / dotBaseR,
+        params
+      );
+      const centerBias =
+        1 - Math.pow(Math.min(1, r / Math.max(1e-3, displayRadius)), 1.35);
+      const smallBoost = smallNozzle ? 0.96 + 0.18 * centerBias : 1.0;
+      dotOpacity *= (0.35 + 0.65 * dwell) * toneComp * smallBoost;
 
-    // draw
-    const b = this.getBrush(rndSize);
-    this.ctx.globalAlpha = dotOpacity;
-    this.ctx.drawImage(b, dotX - rndSize, dotY - rndSize);
+      // draw
+      const b = this.getBrush(rndSize);
+      this.ctx.globalAlpha = dotOpacity;
+      this.ctx.drawImage(b, dotX - rndSize, dotY - rndSize);
 
-    // micro “dither” pair every ~6th dot to smooth tiny gaps (only when small)
-    if (smallNozzle && (i % 6 === 0)) {
-      const off = rndSize * 0.35;
-      const t2 = t + (Math.random() - 0.5) * 0.6;
-      const d2x = dotX + Math.cos(t2) * off;
-      const d2y = dotY + Math.sin(t2) * off;
-      const r2 = Math.max(minGrain, rndSize * (0.8 + Math.random() * 0.3));
-      this.ctx.globalAlpha = dotOpacity * 0.9;
-      this.ctx.drawImage(this.getBrush(r2), d2x - r2, d2y - r2);
+      // micro “dither” pair every ~6th dot to smooth tiny gaps (only when small)
+      if (smallNozzle && i % 6 === 0) {
+        const off = rndSize * 0.35;
+        const t2 = t + (Math.random() - 0.5) * 0.6;
+        const d2x = dotX + Math.cos(t2) * off;
+        const d2y = dotY + Math.sin(t2) * off;
+        const r2 = Math.max(minGrain, rndSize * (0.8 + Math.random() * 0.3));
+        this.ctx.globalAlpha = dotOpacity * 0.9;
+        this.ctx.drawImage(this.getBrush(r2), d2x - r2, d2y - r2);
+      }
+
+      // accumulate wetness sparsely (every 4th dot; slightly stronger if small)
+      if ((i & 3) === 0) {
+        const normNozzleArea = Math.max(64, this.nozzleSize * this.nozzleSize);
+        const G = smallNozzle ? 115 : 100;
+        const wet =
+          ((G * dotOpacity * (rndSize * rndSize)) / normNozzleArea) *
+          (0.8 + 0.6 * this.pressure) *
+          this.flow;
+        this._accumWet(dotX, dotY, wet, speed);
+        this._trySpawnDripAt(dotX, dotY, speed);
+      }
     }
 
-    // accumulate wetness sparsely (every 4th dot; slightly stronger if small)
-    if ((i & 3) === 0) {
-      const normNozzleArea = Math.max(64, this.nozzleSize * this.nozzleSize);
-      const G = smallNozzle ? 115 : 100;
-      const wet = ((G * dotOpacity * (rndSize * rndSize)) / normNozzleArea) *
-                  (0.8 + 0.6 * this.pressure) * this.flow;
-      this._accumWet(dotX, dotY, wet, speed);
-      this._trySpawnDripAt(dotX, dotY, speed);
-    }
+    this.ctx.restore();
   }
-
-  this.ctx.restore();
-}
   // --- helper: draw a tiny "blobby" dot made of 1–4 overlapping sub-dots ---
   _drawDotCluster(cx, cy, baseR, tangentAngle = 0) {
     // choose 1–4 sub-dots; mostly 1–2 so shapes look like dots with slight lumps
@@ -1293,17 +1340,16 @@ createNoisyPath(x, y, size, speed = this.V_REF) {
   // Attempt to spawn (or merge into) a drip near (x,y) given current draw speed
   _trySpawnDripAt(x, y, speed = this.V_REF) {
     if (!this.dripsEnabled) return;
-  
+
     const cx = (x / this.bufScale) | 0;
     const cy = (y / this.bufScale) | 0;
     if (cx < 0 || cy < 0 || cx >= this.bufW || cy >= this.bufH) return;
-  
+
     const idx = cy * this.bufW + cx;
     const now = performance.now();
-  
+
     const nozzle = Math.max(2, this.nozzleSize);
 
-    
     // 🚫 --- Hard cutoff for movement ---
     // When moving fast, skip entirely to prevent drip spawns.
     if (speed > this.V_SLOW * 1.2) return; // <- absolute no-drip threshold
@@ -1312,16 +1358,15 @@ createNoisyPath(x, y, size, speed = this.V_REF) {
       this.paintBuf[idx] *= 0.98; // light decay when sweeping
       return;
     }
-  
+
     // --- Nozzle & speed-aware scaling ---
-    const smallNozScale = nozzle < 22
-      ? 1.35 - 0.35 * Math.min(1, (nozzle - 12) / 10)
-      : 1.0;
-  
+    const smallNozScale =
+      nozzle < 22 ? 1.35 - 0.35 * Math.min(1, (nozzle - 12) / 10) : 1.0;
+
     const slowFactor = Math.min(1.6, this.V_SLOW / Math.max(20, speed));
     const needCenter = this.DRIP_THRESHOLD * smallNozScale * slowFactor;
-    const needPool   = this.NBR_MIN       * smallNozScale * slowFactor;
-  
+    const needPool = this.NBR_MIN * smallNozScale * slowFactor;
+
     // --- Wetness sample in 3×3 area ---
     let pool = 0;
     for (let oy = -1; oy <= 1; oy++) {
@@ -1334,25 +1379,29 @@ createNoisyPath(x, y, size, speed = this.V_REF) {
         pool += w * (ox === 0 && oy === 0 ? 1.0 : 0.6);
       }
     }
-  
+
     const centerWet = this.paintBuf[idx];
     const trigger = 0.55 * (centerWet / needCenter) + 0.45 * (pool / needPool);
-  
+
     // 🧮 --- Raise the knee a bit for more forgiveness ---
-    if ((trigger < 0.94 && speed !== 0) || (speed === 0 && trigger < 0.85)) return;
+    if ((trigger < 0.94 && speed !== 0) || (speed === 0 && trigger < 0.85))
+      return;
 
     // Hard clamp under motion
     if (speed > this.V_SLOW * 0.5 && trigger < 1.1) return;
-  
-    const spawnProb = Math.pow(trigger - (speed === 0 ? 0.85 : 0.94), 3.0) * 3.2;
+
+    const spawnProb =
+      Math.pow(trigger - (speed === 0 ? 0.85 : 0.94), 3.0) * 3.2;
     if (Math.random() > spawnProb) return;
-    
+
     // --- Search bottom-centered region ---
     const pickRadPx = nozzle * 0.55;
     const pickRad = Math.max(1, Math.round(pickRadPx / this.bufScale));
     const maxSide = Math.round(pickRad * 0.5);
-    let bestIx = cx, bestIy = cy, bestScore = -Infinity;
-  
+    let bestIx = cx,
+      bestIy = cy,
+      bestScore = -Infinity;
+
     for (let oy = 0; oy <= pickRad; oy++) {
       const yy = cy + oy;
       if (yy < 0 || yy >= this.bufH) continue;
@@ -1361,34 +1410,42 @@ createNoisyPath(x, y, size, speed = this.V_REF) {
         if (xx < 0 || xx >= this.bufW) continue;
         const w = this.paintBuf[yy * this.bufW + xx];
         if (w <= 0) continue;
-  
+
         const d2 = ox * ox + oy * oy;
         const bias = Math.exp(-d2 * 0.25) * (1 + 0.6 * (oy / (pickRad + 1)));
         const score = w * bias;
         if (score > bestScore) {
           bestScore = score;
-          bestIx = xx; bestIy = yy;
+          bestIx = xx;
+          bestIy = yy;
         }
       }
     }
-  
+
     if (bestScore <= 0) return;
-  
+
     // --- Neighborhood gate ---
     const areaRad = Math.max(1, Math.round((nozzle * 0.6) / this.bufScale));
     let tooSoon = false;
     for (let oy = -areaRad; oy <= areaRad && !tooSoon; oy++) {
       for (let ox = -areaRad; ox <= areaRad; ox++) {
-        const yy = bestIy + oy, xx = bestIx + ox;
+        const yy = bestIy + oy,
+          xx = bestIx + ox;
         if (xx < 0 || yy < 0 || xx >= this.bufW || yy >= this.bufH) continue;
         const k = yy * this.bufW + xx;
-        if (this._spawnCooldown[k] > 0) { tooSoon = true; break; }
+        if (this._spawnCooldown[k] > 0) {
+          tooSoon = true;
+          break;
+        }
         const last = this._lastSpawnAt[k] || 0;
-        if (now - last < this.MIN_SPAWN_INTERVAL_MS) { tooSoon = true; break; }
+        if (now - last < this.MIN_SPAWN_INTERVAL_MS) {
+          tooSoon = true;
+          break;
+        }
       }
     }
     if (tooSoon) return;
-  
+
     // --- Compute spawn pos (small jitter, bottom bias) ---
     const spawnX = (bestIx + 0.5) * this.bufScale;
     const spawnY = (bestIy + 0.5) * this.bufScale;
@@ -1396,239 +1453,296 @@ createNoisyPath(x, y, size, speed = this.V_REF) {
     const jy = Math.random() * (nozzle * 0.06);
     const sx = spawnX + jx;
     const sy = spawnY + jy;
-  
+
     // --- Create the drip ---
     const areaScore = Math.max(0, pool - this.DRIP_THRESHOLD);
-    const vol   = Math.min(1.3, 0.5 + 0.9 * areaScore);
-    const baseR = Math.max(2.0, (1.8 + 0.8 * Math.sqrt(areaScore + 0.01)) * (nozzle / 32));
-  
+    const vol = Math.min(1.3, 0.5 + 0.9 * areaScore);
+    const baseR = Math.max(
+      2.0,
+      (1.8 + 0.8 * Math.sqrt(areaScore + 0.01)) * (nozzle / 32)
+    );
+
     this.drips.push({
-      x: sx, y: sy, px: sx, py: sy, vy: 0,
-      vol, baseR, len: 0, life: 1.0, t: 0,
+      x: sx,
+      y: sy,
+      px: sx,
+      py: sy,
+      vy: 0,
+      vol,
+      baseR,
+      len: 0,
+      life: 1.0,
+      t: 0,
       profile: {
         wobbleF: 0.6 + Math.random() * 1.0,
         wobbleA: this.LATERAL_SPREAD * (0.4 + Math.random() * 1.0),
-        hookJ:   0.6 + Math.random() * 0.6,
+        hookJ: 0.6 + Math.random() * 0.6,
         hookDir: Math.random() < 0.5 ? -1 : 1,
-        widenK:  1.02 + Math.random() * 0.2,
-        seed:    Math.random() * 1000,
-        noiseF:  this.SHAPE_NOISE_FREQ[0] +
-                 Math.random() * (this.SHAPE_NOISE_FREQ[1] - this.SHAPE_NOISE_FREQ[0]),
-        taperTo: this.TAIL_TAPER_MIN +
-                 Math.random() * (this.TAIL_TAPER_MAX - this.TAIL_TAPER_MIN),
-        bead:    Math.random() < this.TAIL_BEAD_CHANCE,
+        widenK: 1.02 + Math.random() * 0.2,
+        seed: Math.random() * 1000,
+        noiseF:
+          this.SHAPE_NOISE_FREQ[0] +
+          Math.random() * (this.SHAPE_NOISE_FREQ[1] - this.SHAPE_NOISE_FREQ[0]),
+        taperTo:
+          this.TAIL_TAPER_MIN +
+          Math.random() * (this.TAIL_TAPER_MAX - this.TAIL_TAPER_MIN),
+        bead: Math.random() < this.TAIL_BEAD_CHANCE,
       },
     });
-  
+
     // --- Neighborhood drain + cooldown ---
     const drainRad = Math.max(1, Math.round((nozzle * 0.4) / this.bufScale));
     for (let oy = -drainRad; oy <= drainRad; oy++) {
       for (let ox = -drainRad; ox <= drainRad; ox++) {
-        const yy = bestIy + oy, xx = bestIx + ox;
+        const yy = bestIy + oy,
+          xx = bestIx + ox;
         if (xx < 0 || yy < 0 || xx >= this.bufW || yy >= this.bufH) continue;
         const rr2 = ox * ox + oy * oy;
         if (rr2 > drainRad * drainRad) continue;
         const k = yy * this.bufW + xx;
         const fall = 0.5 + 0.5 * (1 - rr2 / (drainRad * drainRad));
-        this.paintBuf[k] = Math.max(0, this.paintBuf[k] - this.DRIP_HYST * fall);
+        this.paintBuf[k] = Math.max(
+          0,
+          this.paintBuf[k] - this.DRIP_HYST * fall
+        );
         this._spawnCooldown[k] = this.SPAWN_COOLDOWN_FRAMES * 2;
         this._lastSpawnAt[k] = now;
       }
     }
-  
+
     console.log(
-      `[DRIP-SPAWN] t=${now.toFixed(1)}ms at (x=${sx.toFixed(1)}, y=${sy.toFixed(1)})` +
-      ` pool=${pool.toFixed(2)} trigger=${trigger.toFixed(2)} nozzle=${nozzle} speed=${speed.toFixed(1)}`
+      `[DRIP-SPAWN] t=${now.toFixed(1)}ms at (x=${sx.toFixed(
+        1
+      )}, y=${sy.toFixed(1)})` +
+        ` pool=${pool.toFixed(2)} trigger=${trigger.toFixed(
+          2
+        )} nozzle=${nozzle} speed=${speed.toFixed(1)}`
     );
   }
 
-// --- 4) _updateDrips(dt) with TRAIL/HEAD/cap & frame max logs ---
-_updateDrips(dt) {
-  if (!this.drips.length) return;
+  // --- 4) _updateDrips(dt) with TRAIL/HEAD/cap & frame max logs ---
+  _updateDrips(dt) {
+    if (!this.drips.length) return;
 
-  const ctx = this.ctx;
-  const prevOp = ctx.globalCompositeOperation;
-  const dripOp = this.getDripCompositeMode(); // gold => 'source-over'
-  this._drawingDrip = true;
-  ctx.globalCompositeOperation = dripOp;
-
-  const isGold = this.isGoldColor(this.color);
-
-  // Gold tuning (balanced with spray look)
-  const GLZ = isGold ? 0.08 : 0.0;     // warm midtone multiply glaze
-  const SH1 = isGold ? 0.11 : 0.0;     // primary spec alpha (screen)
-  const SH2 = isGold ? 0.06 : 0.0;     // secondary spec alpha (screen)
-  const OFF1 = 0.34, OFF2 = 0.70;      // highlight offsets (× radius)
-  const SHR1 = 0.88, SHR2 = 0.55;      // specular radius scales
-
-  for (let i = this.drips.length - 1; i >= 0; i--) {
-    const d = this.drips[i];
-    d.t += dt;
-
-    // physics
-    d.gravityScale = 0.85 + Math.random() * 0.3;
-    d.vy += this.GRAVITY * d.gravityScale * dt * (0.55 + 0.45 * d.vol);
-    d.vy *= Math.exp(-this.VISCOSITY * dt);
-    d.py = d.y;
-    d.y += d.vy * dt;
-
-    // lateral wobble + hook
-    const lenNorm = d.len / (d.len + 28);
-    const wobbleEase = Math.min(1, Math.pow(lenNorm, 1.2));
-    const wobble = Math.sin(d.t * (3.0 * d.profile.wobbleF)) * d.profile.wobbleA * wobbleEase;
-    const hookGain = this.TAIL_HOOK_STRENGTH * d.profile.hookJ * (0.6 + 0.4 * lenNorm * lenNorm);
-    const lateral = wobble * dt + d.profile.hookDir * hookGain * lenNorm * dt * 22;
-    const maxSide = Math.min(10, 0.35 * d.len);
-    d.x += Math.max(-maxSide, Math.min(maxSide, lateral));
-
-    const dy = d.y - d.py;
-    d.len += Math.abs(dy);
-
-    // ---- TRAIL ----
-    const stepPx = 1.0;
-    const steps = Math.max(1, Math.floor(Math.abs(dy) / stepPx));
-    const baseTrailAlpha = 0.28 * d.vol; // tuned to match spray density
-
-    for (let s = 1; s <= steps; s++) {
-      const t = s / steps;
-      const yy = d.py + dy * t;
-
-      const widen = Math.min(1.14, 1.0 + 0.0015 * d.len * d.profile.widenK);
-      const capR = this.trailCapFor(d);
-      const elongate = 1 + Math.min(0.4, d.len * 0.003);
-      let rawR = d.baseR * elongate * (1.06 + 0.62 * d.vol) * widen * (1.0 + 0.12 * t);
-
-      // shape noise
-      const n = this._smoothNoise1D(d.profile.seed + d.len * 0.05 * d.profile.noiseF);
-      rawR *= (1 + this.SHAPE_NOISE_AMP * (n - 0.5));
-
-      let R = rawR;
-      if (rawR >= capR) {
-        const overshoot = Math.min(1.0, (rawR - capR) / Math.max(1e-3, capR));
-        R = capR - capR * 0.12 * overshoot * overshoot * (2 - overshoot);
-        R = Math.min(R, capR - 0.25);
-      }
-      R = this._safeR(R);
-
-      const xx = d.x + (Math.random() - 0.5) * 0.4 * R;
-      const nearCap = R / Math.max(1e-3, capR);
-      const falloff = Math.max(0.35, 1 - 0.65 * nearCap * nearCap);
-      const alpha = Math.max(0.05, Math.min(0.22, baseTrailAlpha * (0.7 + 0.5 * t) * falloff));
-
-      // Body (source-over)
-      ctx.globalCompositeOperation = dripOp;
-      ctx.globalAlpha = alpha;
-      ctx.drawImage(this.getBrush(R), xx - R, yy - R);
-
-      // Warm glaze (multiply) – deepens midtones like spray
-      if (isGold && GLZ > 0) {
-        ctx.save();
-        ctx.globalCompositeOperation = "multiply";
-        ctx.globalAlpha = GLZ * (0.9 - 0.5 * t); // slightly stronger near the start
-        ctx.drawImage(this.getBrush(R), xx - R, yy - R);
-        ctx.restore();
-      }
-
-      // Specular highlights (screen)
-      if (isGold) {
-        const spec1 = this.getGoldSpecBrush(Math.max(0.7, R * SHR1));
-        const spec2 = this.getGoldSpecBrush(Math.max(0.5, R * SHR2));
-
-        // primary – up-left
-        ctx.save();
-        ctx.globalCompositeOperation = "screen";
-        ctx.globalAlpha = SH1 * (1.0 - 0.3 * t); // fade along the trail
-        const off1 = R * OFF1;
-        ctx.drawImage(spec1, (xx - spec1.width / 2 / (window.devicePixelRatio || 1)) - off1,
-                             (yy - spec1.height / 2 / (window.devicePixelRatio || 1)) - off1);
-        ctx.restore();
-
-        // secondary – slight lateral
-        ctx.save();
-        ctx.globalCompositeOperation = "screen";
-        ctx.globalAlpha = SH2 * (0.9 - 0.5 * t);
-        const off2x = R * OFF2, off2y = R * 0.10;
-        ctx.drawImage(spec2, (xx - spec2.width / 2 / (window.devicePixelRatio || 1)) + off2x,
-                             (yy - spec2.height / 2 / (window.devicePixelRatio || 1)) - off2y);
-        ctx.restore();
-      }
-
-      // occasional thicker pool near upper trail
-      if (Math.random() < 0.05 && t < 0.25) {
-        ctx.globalCompositeOperation = dripOp;
-        ctx.globalAlpha = Math.min(1, alpha * 1.5);
-        const Rb = R * 1.2;
-        ctx.drawImage(this.getBrush(Rb), xx - Rb, yy - Rb);
-      }
-
-      // keep wetness dynamics
-      this._accumWet(xx, yy, alpha * 0.05);
-    }
-
-    // ---- HEAD ----
-    const Rhead = this.headRadiusFor(d);
-
-    // body
+    const ctx = this.ctx;
+    const prevOp = ctx.globalCompositeOperation;
+    const dripOp = this.getDripCompositeMode(); // gold => 'source-over'
+    this._drawingDrip = true;
     ctx.globalCompositeOperation = dripOp;
-    ctx.globalAlpha = Math.min(0.26, (0.22 + 0.1 * d.vol));
-    ctx.drawImage(this.getBrush(Rhead), d.x - Rhead, d.y - Rhead);
 
-    if (isGold) {
-      // glaze
-      if (GLZ > 0) {
+    const isGold = this.isGoldColor(this.color);
+
+    // Gold tuning (balanced with spray look)
+    const GLZ = isGold ? 0.08 : 0.0; // warm midtone multiply glaze
+    const SH1 = isGold ? 0.11 : 0.0; // primary spec alpha (screen)
+    const SH2 = isGold ? 0.06 : 0.0; // secondary spec alpha (screen)
+    const OFF1 = 0.34,
+      OFF2 = 0.7; // highlight offsets (× radius)
+    const SHR1 = 0.88,
+      SHR2 = 0.55; // specular radius scales
+
+    for (let i = this.drips.length - 1; i >= 0; i--) {
+      const d = this.drips[i];
+      d.t += dt;
+
+      // physics
+      d.gravityScale = 0.85 + Math.random() * 0.3;
+      d.vy += this.GRAVITY * d.gravityScale * dt * (0.55 + 0.45 * d.vol);
+      d.vy *= Math.exp(-this.VISCOSITY * dt);
+      d.py = d.y;
+      d.y += d.vy * dt;
+
+      // lateral wobble + hook
+      const lenNorm = d.len / (d.len + 28);
+      const wobbleEase = Math.min(1, Math.pow(lenNorm, 1.2));
+      const wobble =
+        Math.sin(d.t * (3.0 * d.profile.wobbleF)) *
+        d.profile.wobbleA *
+        wobbleEase;
+      const hookGain =
+        this.TAIL_HOOK_STRENGTH *
+        d.profile.hookJ *
+        (0.6 + 0.4 * lenNorm * lenNorm);
+      const lateral =
+        wobble * dt + d.profile.hookDir * hookGain * lenNorm * dt * 22;
+      const maxSide = Math.min(10, 0.35 * d.len);
+      d.x += Math.max(-maxSide, Math.min(maxSide, lateral));
+
+      const dy = d.y - d.py;
+      d.len += Math.abs(dy);
+
+      // ---- TRAIL ----
+      const stepPx = 1.0;
+      const steps = Math.max(1, Math.floor(Math.abs(dy) / stepPx));
+      const baseTrailAlpha = 0.28 * d.vol; // tuned to match spray density
+
+      for (let s = 1; s <= steps; s++) {
+        const t = s / steps;
+        const yy = d.py + dy * t;
+
+        const widen = Math.min(1.14, 1.0 + 0.0015 * d.len * d.profile.widenK);
+        const capR = this.trailCapFor(d);
+        const elongate = 1 + Math.min(0.4, d.len * 0.003);
+        let rawR =
+          d.baseR * elongate * (1.06 + 0.62 * d.vol) * widen * (1.0 + 0.12 * t);
+
+        // shape noise
+        const n = this._smoothNoise1D(
+          d.profile.seed + d.len * 0.05 * d.profile.noiseF
+        );
+        rawR *= 1 + this.SHAPE_NOISE_AMP * (n - 0.5);
+
+        let R = rawR;
+        if (rawR >= capR) {
+          const overshoot = Math.min(1.0, (rawR - capR) / Math.max(1e-3, capR));
+          R = capR - capR * 0.12 * overshoot * overshoot * (2 - overshoot);
+          R = Math.min(R, capR - 0.25);
+        }
+        R = this._safeR(R);
+
+        const xx = d.x + (Math.random() - 0.5) * 0.4 * R;
+        const nearCap = R / Math.max(1e-3, capR);
+        const falloff = Math.max(0.35, 1 - 0.65 * nearCap * nearCap);
+        const alpha = Math.max(
+          0.05,
+          Math.min(0.22, baseTrailAlpha * (0.7 + 0.5 * t) * falloff)
+        );
+
+        // Body (source-over)
+        ctx.globalCompositeOperation = dripOp;
+        ctx.globalAlpha = alpha;
+        ctx.drawImage(this.getBrush(R), xx - R, yy - R);
+
+        // Warm glaze (multiply) – deepens midtones like spray
+        if (isGold && GLZ > 0) {
+          ctx.save();
+          ctx.globalCompositeOperation = "multiply";
+          ctx.globalAlpha = GLZ * (0.9 - 0.5 * t); // slightly stronger near the start
+          ctx.drawImage(this.getBrush(R), xx - R, yy - R);
+          ctx.restore();
+        }
+
+        // Specular highlights (screen)
+        if (isGold) {
+          const spec1 = this.getGoldSpecBrush(Math.max(0.7, R * SHR1));
+          const spec2 = this.getGoldSpecBrush(Math.max(0.5, R * SHR2));
+
+          // primary – up-left
+          ctx.save();
+          ctx.globalCompositeOperation = "screen";
+          ctx.globalAlpha = SH1 * (1.0 - 0.3 * t); // fade along the trail
+          const off1 = R * OFF1;
+          ctx.drawImage(
+            spec1,
+            xx - spec1.width / 2 / (window.devicePixelRatio || 1) - off1,
+            yy - spec1.height / 2 / (window.devicePixelRatio || 1) - off1
+          );
+          ctx.restore();
+
+          // secondary – slight lateral
+          ctx.save();
+          ctx.globalCompositeOperation = "screen";
+          ctx.globalAlpha = SH2 * (0.9 - 0.5 * t);
+          const off2x = R * OFF2,
+            off2y = R * 0.1;
+          ctx.drawImage(
+            spec2,
+            xx - spec2.width / 2 / (window.devicePixelRatio || 1) + off2x,
+            yy - spec2.height / 2 / (window.devicePixelRatio || 1) - off2y
+          );
+          ctx.restore();
+        }
+
+        // occasional thicker pool near upper trail
+        if (Math.random() < 0.05 && t < 0.25) {
+          ctx.globalCompositeOperation = dripOp;
+          ctx.globalAlpha = Math.min(1, alpha * 1.5);
+          const Rb = R * 1.2;
+          ctx.drawImage(this.getBrush(Rb), xx - Rb, yy - Rb);
+        }
+
+        // keep wetness dynamics
+        this._accumWet(xx, yy, alpha * 0.05);
+      }
+
+      // ---- HEAD ----
+      const Rhead = this.headRadiusFor(d);
+
+      // body
+      ctx.globalCompositeOperation = dripOp;
+      ctx.globalAlpha = Math.min(0.26, 0.22 + 0.1 * d.vol);
+      ctx.drawImage(this.getBrush(Rhead), d.x - Rhead, d.y - Rhead);
+
+      if (isGold) {
+        // glaze
+        if (GLZ > 0) {
+          ctx.save();
+          ctx.globalCompositeOperation = "multiply";
+          ctx.globalAlpha = GLZ;
+          ctx.drawImage(this.getBrush(Rhead), d.x - Rhead, d.y - Rhead);
+          ctx.restore();
+        }
+        // spec lobes
+        const specH1 = this.getGoldSpecBrush(Math.max(0.7, Rhead * SHR1));
+        const specH2 = this.getGoldSpecBrush(Math.max(0.5, Rhead * SHR2));
         ctx.save();
-        ctx.globalCompositeOperation = "multiply";
-        ctx.globalAlpha = GLZ;
-        ctx.drawImage(this.getBrush(Rhead), d.x - Rhead, d.y - Rhead);
+        ctx.globalCompositeOperation = "screen";
+        ctx.globalAlpha = SH1;
+        const offH1 = Rhead * OFF1;
+        ctx.drawImage(
+          specH1,
+          d.x - specH1.width / 2 / (window.devicePixelRatio || 1) - offH1,
+          d.y - specH1.height / 2 / (window.devicePixelRatio || 1) - offH1
+        );
+        ctx.globalAlpha = SH2;
+        const offHx2 = Rhead * OFF2,
+          offHy2 = Rhead * 0.1;
+        ctx.drawImage(
+          specH2,
+          d.x - specH2.width / 2 / (window.devicePixelRatio || 1) + offHx2,
+          d.y - specH2.height / 2 / (window.devicePixelRatio || 1) - offHy2
+        );
         ctx.restore();
       }
-      // spec lobes
-      const specH1 = this.getGoldSpecBrush(Math.max(0.7, Rhead * SHR1));
-      const specH2 = this.getGoldSpecBrush(Math.max(0.5, Rhead * SHR2));
-      ctx.save();
-      ctx.globalCompositeOperation = "screen";
-      ctx.globalAlpha = SH1;
-      const offH1 = Rhead * OFF1;
-      ctx.drawImage(specH1,
-        (d.x - specH1.width / 2 / (window.devicePixelRatio || 1)) - offH1,
-        (d.y - specH1.height / 2 / (window.devicePixelRatio || 1)) - offH1);
-      ctx.globalAlpha = SH2;
-      const offHx2 = Rhead * OFF2, offHy2 = Rhead * 0.10;
-      ctx.drawImage(specH2,
-        (d.x - specH2.width / 2 / (window.devicePixelRatio || 1)) + offHx2,
-        (d.y - specH2.height / 2 / (window.devicePixelRatio || 1)) - offHy2);
-      ctx.restore();
-    }
 
-    // tiny flecks
-    if (Math.random() < 0.12) {
-      for (let k = 0; k < 3; k++) {
-        const rr = 0.5 + Math.random();
-        const xx = d.x + (Math.random() - 0.5) * Rhead * 2;
-        const yy = d.y + (Math.random() + 0.2) * Rhead * 3;
-        ctx.globalCompositeOperation = dripOp;
-        ctx.globalAlpha = 0.05;
-        ctx.drawImage(this.getBrush(rr), xx - rr, yy - rr);
+      // tiny flecks
+      if (Math.random() < 0.12) {
+        for (let k = 0; k < 3; k++) {
+          const rr = 0.5 + Math.random();
+          const xx = d.x + (Math.random() - 0.5) * Rhead * 2;
+          const yy = d.y + (Math.random() + 0.2) * Rhead * 3;
+          ctx.globalCompositeOperation = dripOp;
+          ctx.globalAlpha = 0.05;
+          ctx.drawImage(this.getBrush(rr), xx - rr, yy - rr);
+        }
+      }
+
+      // life decay
+      d.vol -=
+        (this.DEPOSIT_PER_PX * Math.abs(dy)) / 60 + this.WET_EVAP * dt * 0.45;
+
+      // finish
+      if (d.vol <= 0.08 || d.len > 70 || d.y > this.canvas.height + 5) {
+        this._currentDripProfile = d.profile;
+        const taperTo = Math.max(0.8, d.baseR * d.profile.taperTo);
+        this._drawTaperTip(
+          d.x,
+          d.y,
+          dy >= 0 ? 1 : -1,
+          Math.max(1.0, Rhead),
+          taperTo,
+          this.TAIL_CAP_STEPS,
+          0.14
+        );
+        this._currentDripProfile = null;
+        this.drips.splice(i, 1);
+        continue;
       }
     }
 
-    // life decay
-    d.vol -= (this.DEPOSIT_PER_PX * Math.abs(dy)) / 60 + this.WET_EVAP * dt * 0.45;
-
-    // finish
-    if (d.vol <= 0.08 || d.len > 70 || d.y > this.canvas.height + 5) {
-      this._currentDripProfile = d.profile;
-      const taperTo = Math.max(0.8, d.baseR * d.profile.taperTo);
-      this._drawTaperTip(d.x, d.y, dy >= 0 ? 1 : -1, Math.max(1.0, Rhead), taperTo, this.TAIL_CAP_STEPS, 0.14);
-      this._currentDripProfile = null;
-      this.drips.splice(i, 1);
-      continue;
-    }
+    this._drawingDrip = false;
+    ctx.globalCompositeOperation = prevOp;
   }
-
-  this._drawingDrip = false;
-  ctx.globalCompositeOperation = prevOp;
-}
   // game loop hook — call once after constructing the tool
   startDripLoop() {
     const tick = (t) => {

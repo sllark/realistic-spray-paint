@@ -27,14 +27,15 @@
       .tray {
         position: absolute;
         top: -120px;
-        left:0;
+        left: 0;
         width: 100%;
         z-index: 9999;
         display: flex;
         justify-content: center;
         gap: 12px;
-        padding: 10px;
         overflow-x: auto;
+        /* Let taps pass through background to controls beneath; items remain interactive */
+        pointer-events: none;
       }
       .tray .stencil-item {
         height: auto;
@@ -44,6 +45,8 @@
         user-select: none;
         touch-action: none;
         object-fit: contain;
+        /* Re-enable interaction on the icons themselves */
+        pointer-events: auto;
       }
       /* Loose, page-level stencil the user can park anywhere */
       .loose-stencil {
@@ -73,7 +76,7 @@
         width: 97%;
         max-width: 500px;
         height: 760px;
-        max-height: 83%;;
+        max-height: 83%;
         margin: 0 auto; /* center horizontally */
       }
       canvas.stage-layer {

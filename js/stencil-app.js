@@ -22,6 +22,9 @@ class StencilApp {
     this._compositeLoopRunning = false;
     this.trayDrag = null; // { asset, previewEl }
     this.rotateIcon = new Image();
+    // Multi-pointer tracking for touch/pinch
+    this.activePointers = new Map(); // id -> {x,y}
+
     this.rotateIconLoaded = false;
     const srcs = ["assets/rotate.png"];
     const tryLoad = (i = 0) => {
@@ -84,11 +87,13 @@ class StencilApp {
     const layers = [this.guideCanvas, this.strokeCanvas, this.paintCanvas];
     this._stageCanvases = layers;
     layers.forEach((c) => {
-      c.addEventListener("pointerdown", this.onStagePointerDown);
-      c.addEventListener("pointermove", this.onPointerMove);
-      c.addEventListener("pointerup", this.onPointerUp);
-      c.addEventListener("pointercancel", this.onPointerUp);
-      c.addEventListener("pointerleave", this.onPointerUp);
+      c.addEventListener("pointerdown", this.onStagePointerDown, {
+        passive: false,
+      });
+      c.addEventListener("pointermove", this.onPointerMove, { passive: false });
+      c.addEventListener("pointerup", this.onPointerUp, { passive: false });
+      c.addEventListener("pointercancel", this.onPointerUp, { passive: false });
+      c.addEventListener("pointerleave", this.onPointerUp, { passive: false });
     });
 
     // Controls (HUD buttons optional; main panel has clearBtn/exportBtn)
@@ -469,8 +474,13 @@ class StencilApp {
           this.spray &&
           Array.isArray(this.spray.drips) &&
           this.spray.drips.length > 0;
-        // Only bake drips when user is NOT actively drawing to avoid "endpoint dot" artifacts
-        if (hasDrips && this.spray && !this.spray.isDrawing) {
+        // Only bake drips when user is NOT actively drawing and there is fresh stroke content
+        if (
+          hasDrips &&
+          this.spray &&
+          !this.spray.isDrawing &&
+          this.spray._strokeDirty
+        ) {
           this.compositeStroke();
           // Clear the stroke layer after baking so next drip frame draws fresh
           this.strokeCtx.clearRect(
@@ -479,6 +489,8 @@ class StencilApp {
             this.strokeCanvas.width,
             this.strokeCanvas.height
           );
+          // reset dirty flag after baking
+          this.spray._strokeDirty = false;
         }
       } catch (e) {
         // ignore
@@ -611,7 +623,7 @@ class StencilApp {
     const stageW = this.guideCanvas.width / this.dpr;
     const stageH = this.guideCanvas.height / this.dpr;
     const targetH = {
-      girl: Math.max(90, stageH * 0.32),
+      girl: Math.max(90, stageH * 0.26),
       heart: Math.max(60, stageH * 0.12),
       "heart-string": Math.max(80, stageH * 0.12),
     };
@@ -874,6 +886,10 @@ class StencilApp {
   onStagePointerDown(e) {
     e.preventDefault();
     const { x, y } = this.toStage(e);
+    try {
+      e.target.setPointerCapture(e.pointerId);
+    } catch (_) {}
+    this.activePointers.set(e.pointerId, { x, y });
     // 1) If a selected stencil has a hovered handle, start transform instead of painting
     const selectedTop = [...this.instances]
       .reverse()
@@ -900,10 +916,13 @@ class StencilApp {
           startScale: selectedTop.scale,
           startRotation: selectedTop.rotation,
           startAngle: angle,
-          startDist: dist,
+          startDist: Math.max(1, dist),
           cx: selectedTop.x,
           cy: selectedTop.y,
           handle,
+          // two-finger gesture baseline (if a second finger comes down)
+          twoStartDist: null,
+          twoStartAngle: null,
         };
         return; // never start spray when interacting with a handle
       }
@@ -930,29 +949,73 @@ class StencilApp {
   }
 
   onPointerMove(e) {
+    // Update pointer position
+    const pt = this.toStage(e);
+    if (this.activePointers.has(e.pointerId))
+      this.activePointers.set(e.pointerId, pt);
+
+    // Two-finger pinch (scale/rotate) when two pointers are active on a selected instance
+    if (
+      this.gesture &&
+      this.selectedIds.size === 1 &&
+      this.activePointers.size >= 2
+    ) {
+      e.preventDefault();
+      const inst = this.instances.find((i) => i.id === this.gesture.instId);
+      if (inst) {
+        const [p1, p2] = Array.from(this.activePointers.values());
+        const v1x = p1.x - inst.x,
+          v1y = p1.y - inst.y;
+        const v2x = p2.x - inst.x,
+          v2y = p2.y - inst.y;
+        const ang = Math.atan2(v2y, v2x) - Math.atan2(v1y, v1x);
+        const d1 = Math.hypot(v1x, v1y),
+          d2 = Math.hypot(v2x, v2y);
+        const dist = Math.max(1, (d1 + d2) * 0.5);
+        if (this.gesture.twoStartDist == null) {
+          this.gesture.twoStartDist = dist;
+          this.gesture.twoStartAngle = ang;
+          this.gesture.startScale = inst.scale;
+          this.gesture.startRotation = inst.rotation;
+        }
+        const s = Math.max(
+          0.05,
+          Math.min(
+            8,
+            this.gesture.startScale *
+              (dist / Math.max(1, this.gesture.twoStartDist))
+          )
+        );
+        inst.scale = s;
+        inst.rotation =
+          this.gesture.startRotation +
+          (ang - (this.gesture.twoStartAngle || 0));
+        this.redrawGuides();
+        return;
+      }
+    }
+
+    // Single-pointer transform gesture
     if (
       this.activePointerId &&
       e.pointerId === this.activePointerId &&
       this.gesture
     ) {
       e.preventDefault();
-      const { x, y } = this.toStage(e);
+      const { x, y } = pt;
       const inst = this.instances.find((i) => i.id === this.gesture.instId);
       if (inst) {
         if (this.interactionMode === "move") {
           inst.x = x - (this.gesture.startX - this.gesture.cx);
           inst.y = y - (this.gesture.startY - this.gesture.cy);
         } else if (this.interactionMode === "scale") {
-          // uniform scale using distance from center relative to start
           const dx = x - inst.x,
             dy = y - inst.y;
-          const dist = Math.hypot(dx, dy);
-          const scale = Math.max(
-            0.1,
+          const dist = Math.max(1, Math.hypot(dx, dy));
+          const scale =
             this.gesture.startScale *
-              (dist / Math.max(10, this.gesture.startDist))
-          );
-          inst.scale = Math.min(8, scale);
+            (dist / Math.max(1, this.gesture.startDist));
+          inst.scale = Math.max(0.05, Math.min(8, scale));
         } else if (this.interactionMode === "rotate") {
           const dx = x - inst.x,
             dy = y - inst.y;
@@ -967,16 +1030,8 @@ class StencilApp {
 
     if (this.spray.isDrawing) {
       const { x, y } = this.toStage(e);
+      // Draw live to stroke layer only; bake on pointer up
       this.spray.draw(x, y, 1.0);
-      // render to strokeCanvas, then composite per selection
-      this.compositeStroke();
-      // Avoid re-compositing the same stroke content on subsequent move frames
-      this.strokeCtx.clearRect(
-        0,
-        0,
-        this.strokeCanvas.width,
-        this.strokeCanvas.height
-      );
       return;
     }
 
@@ -1002,6 +1057,12 @@ class StencilApp {
       this.interactionMode = null;
       this.gesture = null;
     }
+    // Remove pointer from active set
+    if (this.activePointers.has(e.pointerId))
+      this.activePointers.delete(e.pointerId);
+    try {
+      e.target.releasePointerCapture(e.pointerId);
+    } catch (_) {}
     if (this.spray.isDrawing) {
       this.spray.stopDrawing();
       // finalize last stroke composite
@@ -1013,6 +1074,7 @@ class StencilApp {
         this.strokeCanvas.width,
         this.strokeCanvas.height
       );
+      if (this.spray) this.spray._strokeDirty = false;
     }
   }
 
