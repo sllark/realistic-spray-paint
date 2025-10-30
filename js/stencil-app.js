@@ -20,6 +20,7 @@ class StencilApp {
     this._stageCanvases = []; // for cursor updates
     this._rotateCursorUrl = null; // cached custom cursor for rotate
     this._compositeLoopRunning = false;
+    this.trayDrag = null; // { asset, previewEl }
     this.rotateIcon = new Image();
     this.rotateIconLoaded = false;
     const srcs = ["assets/rotate.png"];
@@ -58,6 +59,8 @@ class StencilApp {
     this.onStagePointerDown = this.onStagePointerDown.bind(this);
     this.onPointerMove = this.onPointerMove.bind(this);
     this.onPointerUp = this.onPointerUp.bind(this);
+    this.onTrayPointerMove = this.onTrayPointerMove.bind(this);
+    this.onTrayPointerUp = this.onTrayPointerUp.bind(this);
 
     this.init();
   }
@@ -69,8 +72,8 @@ class StencilApp {
     // Preload PNGs
     await this.loadAssets();
 
-    // If there are no instances yet, drop initial stencils on the canvas
-    this.spawnInitialStencils();
+    // Build the stencil tray and keep the stage empty on load
+    this.buildStencilTray();
 
     // Wire tray interactions
     document
@@ -89,7 +92,7 @@ class StencilApp {
     });
 
     // Controls (HUD buttons optional; main panel has clearBtn/exportBtn)
-    const clearPaintBtn = document.getElementById("clearPaint");
+    const clearPaintBtn = document.querySelector(".reset-btn");
     if (clearPaintBtn) {
       clearPaintBtn.addEventListener("click", () => {
         this.paintCtx.clearRect(
@@ -101,7 +104,7 @@ class StencilApp {
         this.redrawGuides();
       });
     }
-    const exportPNGBtn = document.getElementById("exportPNG");
+    const exportPNGBtn = document.querySelector(".post-btn");
     if (exportPNGBtn) {
       exportPNGBtn.addEventListener("click", () => {
         const a = document.createElement("a");
@@ -153,10 +156,41 @@ class StencilApp {
       });
     }
 
+    // Spray can image controls (gold/black)
+    const goldCanImg = document.querySelector(".spray-can-gold");
+    const blackCanImg = document.querySelector(".spray-can-black");
+
+    const selectCan = (which) => {
+      if (goldCanImg) goldCanImg.classList.toggle("selected", which === "gold");
+      if (blackCanImg)
+        blackCanImg.classList.toggle("selected", which === "black");
+    };
+
+    if (goldCanImg) {
+      goldCanImg.addEventListener("click", () => {
+        this.spray.setColor("#EAC677");
+        if (colorPicker) colorPicker.value = "#EAC677";
+        setActivePreset(goldBtn || null);
+        selectCan("gold");
+      });
+    }
+    if (blackCanImg) {
+      blackCanImg.addEventListener("click", () => {
+        this.spray.setColor("#221F20");
+        if (colorPicker) colorPicker.value = "#221F20";
+        setActivePreset(blackBtn || null);
+        selectCan("black");
+      });
+    }
+
+    // Initialize selection to match default color
+    selectCan("black");
+
     // Panel Clear / Export
     const panelClearBtn = document.getElementById("clearBtn");
     if (panelClearBtn) {
       panelClearBtn.addEventListener("click", () => {
+        // Clear layers
         this.paintCtx.clearRect(
           0,
           0,
@@ -169,6 +203,15 @@ class StencilApp {
           this.strokeCanvas.width,
           this.strokeCanvas.height
         );
+        // Refill paint layer background to keep the paper color
+        const w = this.paintCanvas.width,
+          h = this.paintCanvas.height;
+        this.paintCtx.save();
+        this.paintCtx.setTransform(this.dpr, 0, 0, this.dpr, 0, 0);
+        const bg = getComputedStyle(document.body).backgroundColor || "#e4e1ce";
+        this.paintCtx.fillStyle = bg;
+        this.paintCtx.fillRect(0, 0, w / this.dpr, h / this.dpr);
+        this.paintCtx.restore();
         this.redrawGuides();
       });
     }
@@ -220,6 +263,44 @@ class StencilApp {
         this.spray.setDripEvaporation(v);
         setText("dripEvaporationValue", (v / 100).toFixed(2));
       });
+
+    // HUD Reset/Post buttons
+    const resetHudBtn = document.querySelector(".reset-btn");
+    if (resetHudBtn) {
+      resetHudBtn.addEventListener("click", () => {
+        const panelClearBtnEl = document.getElementById("clearBtn");
+        if (panelClearBtnEl) {
+          panelClearBtnEl.click();
+          return;
+        }
+        // Fallback same as panel clear + refill
+        const w = this.paintCanvas.width,
+          h = this.paintCanvas.height;
+        this.paintCtx.clearRect(0, 0, w, h);
+        this.strokeCtx.clearRect(
+          0,
+          0,
+          this.strokeCanvas.width,
+          this.strokeCanvas.height
+        );
+        this.paintCtx.save();
+        this.paintCtx.setTransform(this.dpr, 0, 0, this.dpr, 0, 0);
+        const bg = getComputedStyle(document.body).backgroundColor || "#e4e1ce";
+        this.paintCtx.fillStyle = bg;
+        this.paintCtx.fillRect(0, 0, w / this.dpr, h / this.dpr);
+        this.paintCtx.restore();
+        this.redrawGuides();
+      });
+    }
+    const postHudBtn = document.querySelector(".post-btn");
+    if (postHudBtn) {
+      postHudBtn.addEventListener("click", () => {
+        const a = document.createElement("a");
+        a.download = "stencil-art.png";
+        a.href = this.paintCanvas.toDataURL("image/png");
+        a.click();
+      });
+    }
 
     // --- Core spray controls ---
     const nozzleSlider = document.getElementById("nozzleSlider");
@@ -326,6 +407,23 @@ class StencilApp {
     // Slightly more permissive defaults to see drips easier
     this.spray.setDripThreshold(59);
     this.spray.setFlow(120);
+  }
+
+  buildStencilTray() {
+    const tray = document.getElementById("stencilTray");
+    if (!tray) return;
+    tray.innerHTML = "";
+    // Ensure tray is visible
+    tray.style.display = "flex";
+    // Render actual asset previews (images)
+    Object.entries(this.assetDefs).forEach(([key, url]) => {
+      const img = document.createElement("img");
+      img.className = "stencil-item";
+      img.setAttribute("data-asset", key);
+      img.alt = key;
+      img.src = url;
+      tray.appendChild(img);
+    });
   }
 
   // Rebuild SprayPaint when canvas size changes so internal buffers match
@@ -504,18 +602,26 @@ class StencilApp {
 
   // Add a stencil instance
   addInstance(assetKey, x, y, scaleOverride) {
+    console.log("addInstance", assetKey, x, y, scaleOverride);
     const id = Math.random().toString(36).slice(2);
     const bitmap = this.assetBitmaps[assetKey];
+    console.log("bitmap", bitmap.width, bitmap.height);
     if (!bitmap) return;
-    // Default scale so the instance isn't huge on mobile
+    // Default scale tuned per-asset so sizes feel intentional
     const stageW = this.guideCanvas.width / this.dpr;
     const stageH = this.guideCanvas.height / this.dpr;
-    const maxTarget = Math.max(100, Math.min(stageW, stageH) * 0.22);
-    const baseMax = Math.max(bitmap.width, bitmap.height);
+    const targetH = {
+      girl: Math.max(90, stageH * 0.32),
+      heart: Math.max(60, stageH * 0.12),
+      "heart-string": Math.max(80, stageH * 0.12),
+    };
+    const baseH = Math.max(1, bitmap.height);
+    const computedScale = (targetH[assetKey] || stageH * 0.25) / baseH;
     const defaultScale =
       scaleOverride !== undefined
         ? scaleOverride
-        : Math.min(1, maxTarget / Math.max(1, baseMax));
+        : Math.max(0.05, Math.min(2.5, computedScale));
+    console.log("defaultScale", defaultScale);
     const inst = {
       id,
       assetKey,
@@ -664,14 +770,104 @@ class StencilApp {
 
   // Pointer from tray creates an instance on drop at pointer location
   onTrayPointerDown(e) {
-    const chip = e.target.closest(".stencil-chip");
+    const chip =
+      e.target.closest(".stencil-item") || e.target.closest(".stencil-chip");
     if (!chip) return;
     e.preventDefault();
     const asset = chip.getAttribute("data-asset");
+    // start drag preview
+    const url = this.assetDefs[asset];
+    const img = document.createElement("img");
+    img.src = url;
+    img.alt = asset;
+    img.style.position = "fixed";
+    img.style.left = e.clientX + "px";
+    img.style.top = e.clientY + "px";
+    img.style.transform = "translate(-50%, -50%)";
+    img.style.width = "90px";
+    img.style.height = "auto";
+    img.style.maxHeight = "140px";
+    img.style.opacity = "0.85";
+    img.style.pointerEvents = "none";
+    img.style.zIndex = "9999";
+    img.style.objectFit = "contain";
+    document.body.appendChild(img);
+    // Hide the source in-tray to keep its slot without reflow
+    if (chip) chip.style.visibility = "hidden";
+    this.trayDrag = { asset, previewEl: img, sourceEl: chip };
+    window.addEventListener("pointermove", this.onTrayPointerMove);
+    window.addEventListener("pointerup", this.onTrayPointerUp);
+  }
+
+  onTrayPointerMove(e) {
+    if (!this.trayDrag || !this.trayDrag.previewEl) return;
+    const el = this.trayDrag.previewEl;
+    el.style.left = e.clientX + "px";
+    el.style.top = e.clientY + "px";
+  }
+
+  onTrayPointerUp(e) {
+    if (!this.trayDrag) return;
+    const { asset, previewEl } = this.trayDrag;
+    window.removeEventListener("pointermove", this.onTrayPointerMove);
+    window.removeEventListener("pointerup", this.onTrayPointerUp);
+
+    // drop if inside stage rect
     const stageRect = this.paintCanvas.getBoundingClientRect();
-    const x = e.clientX - stageRect.left;
-    const y = e.clientY - stageRect.top + 80; // drop slightly below tray
-    this.addInstance(asset, x, y);
+    const inside =
+      e.clientX >= stageRect.left &&
+      e.clientX <= stageRect.right &&
+      e.clientY >= stageRect.top &&
+      e.clientY <= stageRect.bottom;
+    if (inside) {
+      if (previewEl && previewEl.parentNode)
+        previewEl.parentNode.removeChild(previewEl);
+      const x = e.clientX - stageRect.left;
+      const y = e.clientY - stageRect.top;
+      this.addInstance(asset, x, y);
+      this.trayDrag = null;
+      return;
+    }
+
+    // Otherwise keep the stencil as a movable element on the page
+    if (previewEl) {
+      const el = previewEl;
+      el.classList.add("loose-stencil");
+      el.style.pointerEvents = "auto";
+      el.style.cursor = "grab";
+      el.style.left = e.clientX + "px";
+      el.style.top = e.clientY + "px";
+
+      const onMove = (ev) => {
+        el.style.left = ev.clientX + "px";
+        el.style.top = ev.clientY + "px";
+      };
+      const onUp = (ev) => {
+        document.removeEventListener("pointermove", onMove);
+        document.removeEventListener("pointerup", onUp);
+        el.style.cursor = "grab";
+        const r = this.paintCanvas.getBoundingClientRect();
+        const overCanvas =
+          ev.clientX >= r.left &&
+          ev.clientX <= r.right &&
+          ev.clientY >= r.top &&
+          ev.clientY <= r.bottom;
+        if (overCanvas) {
+          if (el.parentNode) el.parentNode.removeChild(el);
+          const cx = ev.clientX - r.left;
+          const cy = ev.clientY - r.top;
+          this.addInstance(asset, cx, cy);
+        }
+      };
+      const startDrag = (ev) => {
+        ev.preventDefault();
+        el.style.cursor = "grabbing";
+        document.addEventListener("pointermove", onMove);
+        document.addEventListener("pointerup", onUp);
+      };
+      el.addEventListener("pointerdown", startDrag);
+    }
+    this.trayDrag = null;
   }
 
   // Stage interactions: select/move, press with two fingers to rotate/scale (simple)
@@ -720,6 +916,10 @@ class StencilApp {
       return; // don't start spraying on the same click that selects
     }
     // start spraying (empty area or already-selected)
+    // Deselect any current selection when starting to paint
+    if (!hit || (hit && this.selectedIds.has(hit.id))) {
+      this.selectOnly(null);
+    }
     this.strokeCtx.clearRect(
       0,
       0,
@@ -1033,27 +1233,8 @@ class StencilApp {
 
   // Composite strokeCanvas to paintCanvas with stencil masks when selected
   compositeStroke() {
-    const hasSelection = this.selectedIds.size > 0;
     const sw = this.strokeCanvas.width / this.dpr;
     const sh = this.strokeCanvas.height / this.dpr;
-    if (!hasSelection) {
-      // draw full stroke
-      this.paintCtx.save();
-      this.paintCtx.globalCompositeOperation = "source-over";
-      this.paintCtx.drawImage(
-        this.strokeCanvas,
-        0,
-        0,
-        sw * this.dpr,
-        sh * this.dpr,
-        0,
-        0,
-        sw,
-        sh
-      );
-      this.paintCtx.restore();
-      return;
-    }
 
     if (!this.clipToStencil) {
       // 1) Keep overspray outside selected stencil bbox(es)
@@ -1064,7 +1245,6 @@ class StencilApp {
       og.drawImage(this.strokeCanvas, 0, 0);
       // remove inside each ROTATED rect, not the AABB
       for (const inst of this.instances) {
-        if (!this.selectedIds.has(inst.id)) continue;
         const hp = this.getHandlePositions(inst);
         // carve out the rotated quad from the outside layer
         og.save();
@@ -1107,9 +1287,8 @@ class StencilApp {
       );
       this.paintCtx.restore();
 
-      // 2) For each selected stencil, draw masked inside region
+      // 2) For each stencil, draw masked inside region
       for (const inst of this.instances) {
-        if (!this.selectedIds.has(inst.id)) continue;
         const bbox = this.rotatedBbox(inst);
         const clip = document.createElement("canvas");
         clip.width = Math.ceil(bbox.w * this.dpr);
@@ -1149,7 +1328,6 @@ class StencilApp {
     }
 
     for (const inst of this.instances) {
-      if (!this.selectedIds.has(inst.id)) continue;
       const bbox = this.rotatedBbox(inst);
 
       // clipCanvas: draw stroke region then mask with destination-in

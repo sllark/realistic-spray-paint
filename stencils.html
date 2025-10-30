@@ -11,22 +11,50 @@
         --bg: #e4e1ce;
       }
       body.stencils {
-        background: var(--bg);
+        /* Use canvas texture background for the whole page */
+        background: var(--bg) url("assets/canvas-bg.jpg") center / cover
+          no-repeat fixed;
         margin: 0;
       }
       #stencilApp {
         display: flex;
         flex-direction: column;
+        justify-content: flex-end;
+        padding-bottom: 60px;
         min-height: 100vh;
+        height: 100vh;
       }
       .tray {
+        position: absolute;
+        top: -120px;
+        left:0;
+        width: 100%;
+        z-index: 9999;
         display: flex;
+        justify-content: center;
         gap: 12px;
         padding: 10px;
         overflow-x: auto;
-        background: rgba(255, 255, 255, 0.6);
-        backdrop-filter: blur(6px);
-        border-bottom: 1px solid #ddd;
+      }
+      .tray .stencil-item {
+        height: auto;
+        max-height: 140px;
+        width: 90px;
+        cursor: pointer;
+        user-select: none;
+        touch-action: none;
+        object-fit: contain;
+      }
+      /* Loose, page-level stencil the user can park anywhere */
+      .loose-stencil {
+        position: fixed;
+        /* transform: translate(-50%, -50%); */
+        /* max-width: 140px; */
+        /* max-height: 140px; */
+        z-index: 9999;
+        user-select: none;
+        touch-action: none;
+        pointer-events: auto;
       }
       .stencil-chip {
         flex: 0 0 auto;
@@ -41,6 +69,12 @@
       .stage {
         position: relative;
         flex: 1;
+        /* Canvas/stage sizing as requested */
+        width: 97%;
+        max-width: 500px;
+        height: 760px;
+        max-height: 83%;;
+        margin: 0 auto; /* center horizontally */
       }
       canvas.stage-layer {
         position: absolute;
@@ -51,22 +85,50 @@
       }
       .hud {
         position: absolute;
-        right: 8px;
-        bottom: 8px;
+        left: 15px;
+        bottom: -45px;
         display: flex;
-        gap: 8px;
+        gap: 4px;
       }
+
       .hud button {
-        padding: 8px 10px;
-        border-radius: 10px;
-        border: 1px solid #ccc;
-        background: #fff;
+        font-size: 20px;
+        border: 1px solid transparent;
+        background: transparent;
         color: #000;
+        text-transform: uppercase;
+        font-family: monospace;
       }
+
+      .spray-cans {
+        position: absolute;
+        right: 15px;
+        bottom: -45px;
+        display: flex;
+        gap: 10px;
+      }
+
+      .spray-cans img {
+        width: 40px;
+        height: auto;
+        cursor: pointer;
+        border-radius: 6px;
+        transition: box-shadow 0.2s ease, outline-color 0.2s ease;
+        padding: 0 6px;
+      }
+      .spray-cans img.selected {
+        outline: 2px solid #484848;
+        background-color: #e1e1e1;
+      }
+
       @media (min-width: 768px) {
         .stencil-chip {
           font-size: 15px;
         }
+      }
+
+      #controls {
+        /* display: none; */
       }
 
       /* Accordion styles */
@@ -112,12 +174,30 @@
   </head>
   <body class="stencils">
     <div id="stencilApp">
-      <div class="tray" id="stencilTray" style="display: none"></div>
       <div class="stage">
+        <div class="tray" id="stencilTray" style="display: none"></div>
         <!-- Layers: guide > stroke > paint -->
         <canvas id="paintCanvas" class="stage-layer"></canvas>
         <canvas id="strokeCanvas" class="stage-layer"></canvas>
         <canvas id="guideCanvas" class="stage-layer"></canvas>
+
+        <div class="hud">
+          <button class="reset-btn">Reset</button>
+          <button class="post-btn">Post</button>
+        </div>
+
+        <div class="spray-cans">
+          <img
+            src="assets/spray-can-gold.png"
+            alt="Spray Can Gold"
+            class="spray-can-gold"
+          />
+          <img
+            src="assets/spray-can-black.png"
+            alt="Spray Can Black"
+            class="spray-can-black"
+          />
+        </div>
       </div>
       <!-- Controls Panel (copied from index.html) -->
       <div id="controls" style="background: rgba(0, 0, 0, 0.85)">
@@ -321,7 +401,6 @@
           </div>
         </div>
       </div>
-      <div class="hud"></div>
     </div>
 
     <script src="js/spray.js"></script>
