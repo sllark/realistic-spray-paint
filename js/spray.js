@@ -112,7 +112,7 @@ class SprayPaint {
     this.TAIL_CAP_STEPS = 7; // how many stamps to round the tip when a drip ends
 
     // per-location spawn throttling (ms); avoid multiple instant drips
-    this.MIN_SPAWN_INTERVAL_MS = 1800; // ~0.55s
+    this.MIN_SPAWN_INTERVAL_MS = 2000; // ~0.55s
     this._lastSpawnAt = new Uint32Array(this.paintBuf.length); // per-cell timestamp (ms)
 
     // optional: longer cell cooldown after a spawn (frames, decremented in loop)
@@ -1339,18 +1339,18 @@ createNoisyPath(x, y, size, speed = this.V_REF) {
     const trigger = 0.55 * (centerWet / needCenter) + 0.45 * (pool / needPool);
   
     // 🧮 --- Raise the knee a bit for more forgiveness ---
-    if ((trigger < 0.94 && speed !== 0) || (speed === 0 && trigger < 0.7)) return;
+    if ((trigger < 0.94 && speed !== 0) || (speed === 0 && trigger < 0.85)) return;
 
     // Hard clamp under motion
     if (speed > this.V_SLOW * 0.5 && trigger < 1.1) return;
   
-    const spawnProb = Math.pow(trigger - (speed === 0 ? 0.3 : 0.94), 3.0) * 3.2;
+    const spawnProb = Math.pow(trigger - (speed === 0 ? 0.85 : 0.94), 3.0) * 3.2;
     if (Math.random() > spawnProb) return;
     
     // --- Search bottom-centered region ---
     const pickRadPx = nozzle * 0.55;
     const pickRad = Math.max(1, Math.round(pickRadPx / this.bufScale));
-    const maxSide = Math.round(pickRad * 0.6);
+    const maxSide = Math.round(pickRad * 0.5);
     let bestIx = cx, bestIy = cy, bestScore = -Infinity;
   
     for (let oy = 0; oy <= pickRad; oy++) {
