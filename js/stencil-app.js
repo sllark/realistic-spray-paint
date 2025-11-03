@@ -22,6 +22,47 @@ class StencilApp {
     this._compositeLoopRunning = false;
     this.trayDrag = null; // { asset, previewEl }
     this.rotateIcon = new Image();
+    // Default cursor reflecting selected can
+    this._canCursor = null;
+    this._makeCursorFromImage = (
+      src,
+      hotspotX = 6,
+      hotspotY = 6,
+      maxLongSide = 64
+    ) => {
+      return new Promise((resolve) => {
+        const img = new Image();
+        img.crossOrigin = "anonymous";
+        img.onload = () => {
+          try {
+            const ratio = img.width / Math.max(1, img.height);
+            const longIsWidth = ratio >= 1;
+            const targetLong = Math.max(16, Math.min(128, maxLongSide));
+            const w = longIsWidth
+              ? targetLong
+              : Math.max(8, Math.round(targetLong * ratio));
+            const h = longIsWidth
+              ? Math.max(8, Math.round(targetLong / Math.max(0.01, ratio)))
+              : targetLong;
+            const c = document.createElement("canvas");
+            c.width = w;
+            c.height = h;
+            const g = c.getContext("2d");
+            g.clearRect(0, 0, w, h);
+            g.imageSmoothingEnabled = true;
+            g.imageSmoothingQuality = "high";
+            g.drawImage(img, 0, 0, w, h);
+            const url = c.toDataURL("image/png");
+            resolve(`url('${url}') ${hotspotX} ${hotspotY}, auto`);
+          } catch (_) {
+            resolve(`url('${src}') ${hotspotX} ${hotspotY}, auto`);
+          }
+        };
+        img.onerror = () =>
+          resolve(`url('${src}') ${hotspotX} ${hotspotY}, auto`);
+        img.src = src;
+      });
+    };
     // Multi-pointer tracking for touch/pinch
     this.activePointers = new Map(); // id -> {x,y}
 
@@ -106,6 +147,22 @@ class StencilApp {
           this.paintCanvas.width,
           this.paintCanvas.height
         );
+        // Clear stroke layer as well
+        this.strokeCtx.clearRect(
+          0,
+          0,
+          this.strokeCanvas.width,
+          this.strokeCanvas.height
+        );
+        // Remove all placed stencil instances and selection
+        this.instances = [];
+        this.selectedIds.clear();
+        // Unhide all tray images
+        const tray = document.getElementById("stencilTray");
+        if (tray)
+          Array.from(tray.querySelectorAll(".stencil-item")).forEach(
+            (el) => (el.style.visibility = "visible")
+          );
         this.redrawGuides();
       });
     }
@@ -165,10 +222,27 @@ class StencilApp {
     const goldCanImg = document.querySelector(".spray-can-gold");
     const blackCanImg = document.querySelector(".spray-can-black");
 
-    const selectCan = (which) => {
+    const selectCan = async (which) => {
       if (goldCanImg) goldCanImg.classList.toggle("selected", which === "gold");
       if (blackCanImg)
         blackCanImg.classList.toggle("selected", which === "black");
+
+      // Build a cursor using the can image; hotspot tuned roughly near nozzle
+      const hotspotX = 8,
+        hotspotY = 8;
+      const src =
+        which === "gold"
+          ? "assets/spray-can-gold.png"
+          : "assets/spray-can-black.png";
+      // Downscale to a safe cursor size via canvas to improve browser support (preserve aspect)
+      this._canCursor = await this._makeCursorFromImage(
+        src,
+        hotspotX,
+        hotspotY,
+        72
+      );
+      // Apply immediately as base cursor across stage layers
+      this.setStageCursor(this._canCursor);
     };
 
     if (goldCanImg) {
@@ -294,6 +368,15 @@ class StencilApp {
         this.paintCtx.fillStyle = bg;
         this.paintCtx.fillRect(0, 0, w / this.dpr, h / this.dpr);
         this.paintCtx.restore();
+        // Remove all placed stencil instances and selection
+        this.instances = [];
+        this.selectedIds.clear();
+        // Unhide all tray images
+        const tray = document.getElementById("stencilTray");
+        if (tray)
+          Array.from(tray.querySelectorAll(".stencil-item")).forEach(
+            (el) => (el.style.visibility = "visible")
+          );
         this.redrawGuides();
       });
     }
@@ -423,7 +506,7 @@ class StencilApp {
     // Render actual asset previews (images)
     Object.entries(this.assetDefs).forEach(([key, url]) => {
       const img = document.createElement("img");
-      img.className = "stencil-item";
+      img.className = `stencil-item ${key}-stencil`;
       img.setAttribute("data-asset", key);
       img.alt = key;
       img.src = url;
@@ -623,9 +706,9 @@ class StencilApp {
     const stageW = this.guideCanvas.width / this.dpr;
     const stageH = this.guideCanvas.height / this.dpr;
     const targetH = {
-      girl: Math.max(90, stageH * 0.26),
+      girl: Math.max(90, stageH * 0.32),
       heart: Math.max(60, stageH * 0.12),
-      "heart-string": Math.max(80, stageH * 0.12),
+      "heart-string": Math.max(70, stageH * 0.1),
     };
     const baseH = Math.max(1, bitmap.height);
     const computedScale = (targetH[assetKey] || stageH * 0.25) / baseH;
@@ -634,6 +717,7 @@ class StencilApp {
         ? scaleOverride
         : Math.max(0.05, Math.min(2.5, computedScale));
     console.log("defaultScale", defaultScale);
+    const defaultRotationDeg = { girl: -15, heart: 5, "heart-string": -8 };
     const inst = {
       id,
       assetKey,
@@ -641,7 +725,7 @@ class StencilApp {
       x,
       y,
       scale: defaultScale,
-      rotation: 0,
+      rotation: ((defaultRotationDeg[assetKey] ?? 0) * Math.PI) / 180,
       maskCanvas: null,
     };
     inst.maskCanvas = this.buildMaskCanvas(inst);
@@ -795,10 +879,16 @@ class StencilApp {
     img.style.position = "fixed";
     img.style.left = e.clientX + "px";
     img.style.top = e.clientY + "px";
-    img.style.transform = "translate(-50%, -50%)";
-    img.style.width = "90px";
+    img.style.transform =
+      asset === "girl"
+        ? "rotate(-15deg) translate(-50%, -50%)"
+        : asset === "heart"
+        ? "rotate(5deg) translate(-50%, -50%)"
+        : "rotate(-8deg) translate(-50%, -50%)";
+    img.style.width =
+      asset === "girl" ? "135px" : asset === "heart" ? "95px" : "65px";
     img.style.height = "auto";
-    img.style.maxHeight = "140px";
+    img.style.maxHeight = asset === "girl" ? "240px" : "140px";
     img.style.opacity = "0.85";
     img.style.pointerEvents = "none";
     img.style.zIndex = "9999";
@@ -1055,7 +1145,10 @@ class StencilApp {
         const h = this.handleHit(inst, x, y);
         if (h) cursor = this.cursorForHandle(h, inst);
       }
-      this.setStageCursor(cursor);
+      // Use the can cursor as the default fallback when not over a handle
+      this.setStageCursor(
+        cursor === "default" ? this._canCursor || "default" : cursor
+      );
     }
   }
 
@@ -1148,24 +1241,25 @@ class StencilApp {
         g.lineTo(hp.sw.x, hp.sw.y);
         g.closePath();
         g.stroke();
-        // draw transform handles (center move + 8 resize + 1 rotate)
+        // draw transform handles (center move + 4 corner resize + 1 rotate)
         g.setLineDash([]);
-        this.drawHandle(g, hp.center.x, hp.center.y, "#fbbc04");
-        const order = ["nw", "n", "ne", "e", "se", "s", "sw", "w"];
-        for (const k of order) this.drawHandle(g, hp[k].x, hp[k].y, "#1a73e8");
+        this.drawHandle(g, hp.center.x, hp.center.y, "#fbbc04", 10);
+        const corners = ["nw", "ne", "se", "sw"];
+        for (const k of corners)
+          this.drawHandle(g, hp[k].x, hp[k].y, "#1a73e8", 6);
         this.drawRotateHandle(g, hp.rotate.x, hp.rotate.y);
         g.restore();
       }
     }
   }
 
-  drawHandle(g, x, y, color) {
+  drawHandle(g, x, y, color, radius = 10) {
     g.save();
     g.fillStyle = color;
     g.strokeStyle = "#fff";
     g.lineWidth = 2;
     g.beginPath();
-    g.arc(x, y, 10, 0, Math.PI * 2);
+    g.arc(x, y, radius, 0, Math.PI * 2);
     g.fill();
     g.stroke();
     g.restore();
@@ -1181,38 +1275,11 @@ class StencilApp {
     if (!handle.startsWith("resize:")) return "default";
 
     const dir = handle.split(":")[1];
-    const rot = ((inst.rotation % (Math.PI * 2)) + Math.PI * 2) % (Math.PI * 2);
-    const within = (ang) => {
-      const a = Math.abs(((rot - ang + Math.PI) % (2 * Math.PI)) - Math.PI);
-      return a;
-    };
-
-    // For edges: choose ns vs ew based on rotation alignment
-    const edgeAxis = (axisAngle) =>
-      within(axisAngle) < Math.PI / 4 ? "ns-resize" : "ew-resize";
-    // For corners: choose diagonal based on rotation phase within 90°
-    const diagType = () => {
-      const r = ((rot % (Math.PI / 2)) + Math.PI / 2) % (Math.PI / 2); // 0..PI/2
-      const standard = r < Math.PI / 4; // near axes → standard mapping
-      return standard
-        ? { a: "nwse-resize", b: "nesw-resize" }
-        : { a: "nesw-resize", b: "nwse-resize" };
-    };
-
-    switch (dir) {
-      case "n":
-      case "s":
-        return edgeAxis(0); // axis aligned with y when rot≈0
-      case "e":
-      case "w":
-        return edgeAxis(Math.PI / 2);
-      case "nw":
-      case "se":
-        return diagType().a;
-      case "ne":
-      case "sw":
-        return diagType().b;
-    }
+    // Use fixed mapping by handle so the diagonal never flips 180°
+    if (dir === "nw" || dir === "se") return "nwse-resize";
+    if (dir === "ne" || dir === "sw") return "nesw-resize";
+    if (dir === "n" || dir === "s") return "ns-resize";
+    if (dir === "e" || dir === "w") return "ew-resize";
     return "default";
   }
 
@@ -1456,19 +1523,15 @@ class StencilApp {
   handleHit(inst, x, y) {
     const hp = this.getHandlePositions(inst);
     const rotPos = hp.rotate;
-    const within = (px, py, hx, hy, r = 14) =>
+    const within = (px, py, hx, hy, r = 12) =>
       Math.hypot(px - hx, py - hy) <= r;
     // center move handle
     if (within(x, y, hp.center.x, hp.center.y)) return "move";
     const handles = [
       ["resize:nw", hp.nw.x, hp.nw.y],
-      ["resize:n", hp.n.x, hp.n.y],
       ["resize:ne", hp.ne.x, hp.ne.y],
-      ["resize:e", hp.e.x, hp.e.y],
       ["resize:se", hp.se.x, hp.se.y],
-      ["resize:s", hp.s.x, hp.s.y],
       ["resize:sw", hp.sw.x, hp.sw.y],
-      ["resize:w", hp.w.x, hp.w.y],
     ];
     for (const [k, hx, hy] of handles) {
       if (within(x, y, hx, hy)) return k;

@@ -6,34 +6,50 @@
     <title>Spray + Stencils</title>
     <link rel="stylesheet" href="styles.css" />
     <style>
+      @font-face {
+        font-family: "ArchimotoV01-Regular";
+        src: url("assets/fonts/ArchimotoV01-Regular.otf") format("opentype");
+        font-weight: 100;
+        font-style: normal;
+        font-display: swap;
+      }
       /* Mobile-first additions for stencil page */
       :root {
         --bg: #e4e1ce;
       }
+      html,
+      body {
+        height: 100%;
+      }
       body.stencils {
         /* Use canvas texture background for the whole page */
-        background: var(--bg) url("assets/canvas-bg.jpg") center / cover
-          no-repeat fixed;
+        background: var(--bg) url("assets/bg-2.webp") center / cover no-repeat
+          fixed;
         margin: 0;
+        font-family: "ArchimotoV01-Regular", system-ui, -apple-system, Segoe UI,
+          Roboto, Helvetica, Arial, sans-serif;
+        /* Make body fill the visible viewport on mobile (accounts for URL bar) */
+        min-height: 100svh;
       }
       #stencilApp {
         display: flex;
         flex-direction: column;
         justify-content: flex-end;
-        padding-bottom: 60px;
-        min-height: 100vh;
-        height: 100vh;
+        /* Keep content above iOS Safari toolbar */
+        padding-bottom: calc(env(safe-area-inset-bottom) + 60px);
+        min-height: 100svh;
+        height: 100svh;
       }
       .tray {
         position: absolute;
-        top: -120px;
+        top: -100px;
         left: 0;
         width: 100%;
         z-index: 9999;
         display: flex;
         justify-content: center;
         gap: 12px;
-        overflow-x: auto;
+        /* overflow-x: auto; */
         /* Let taps pass through background to controls beneath; items remain interactive */
         pointer-events: none;
       }
@@ -47,6 +63,23 @@
         object-fit: contain;
         /* Re-enable interaction on the icons themselves */
         pointer-events: auto;
+      }
+      .tray .stencil-item.girl-stencil {
+        max-height: 200px;
+        width: 115px;
+        transform: rotate(-15deg);
+      }
+      .tray .stencil-item.heart-stencil {
+        width: 85px;
+        transform: rotate(5deg);
+        margin-top: -21px;
+        margin-left: -5px;
+      }
+      .tray .stencil-item.heart-string-stencil {
+        width: 60px;
+        transform: rotate(-8deg);
+        margin-left: 10px;
+        margin-top: -20px;
       }
       /* Loose, page-level stencil the user can park anywhere */
       .loose-stencil {
@@ -71,57 +104,53 @@
       }
       .stage {
         position: relative;
-        flex: 1;
-        /* Canvas/stage sizing as requested */
-        width: 97%;
-        max-width: 500px;
-        height: 760px;
-        max-height: 83%;
+        flex: 0 0 auto;
+        min-height: 0; /* allow flex child to shrink under mobile chrome */
+        width: 95%;
+        height: 78svh; /* 80% of visible viewport height */
+        max-width: 600px;
         margin: 0 auto; /* center horizontally */
       }
       canvas.stage-layer {
         position: absolute;
-        inset: 0;
+        left: 0;
+        bottom: 0;
         width: 100%;
         height: 100%;
         touch-action: none;
       }
       .hud {
         position: absolute;
-        left: 15px;
-        bottom: -45px;
+        left: 10px;
+        bottom: calc(env(safe-area-inset-bottom) + -40px);
         display: flex;
         gap: 4px;
       }
 
       .hud button {
-        font-size: 20px;
-        border: 1px solid transparent;
+        font-size: 18px;
+        border: 0;
         background: transparent;
         color: #000;
         text-transform: uppercase;
-        font-family: monospace;
+        padding: 4px 8px;
+        font-family: "ArchimotoV01-Regular", monospace, -apple-system, Segoe UI,
+          Roboto, Helvetica, Arial, sans-serif;
       }
 
       .spray-cans {
         position: absolute;
-        right: 15px;
-        bottom: -45px;
+        right: 10px;
+        bottom: calc(env(safe-area-inset-bottom) - 45px);
         display: flex;
         gap: 10px;
       }
 
       .spray-cans img {
-        width: 40px;
+        width: 45px;
         height: auto;
         cursor: pointer;
-        border-radius: 6px;
         transition: box-shadow 0.2s ease, outline-color 0.2s ease;
-        padding: 0 6px;
-      }
-      .spray-cans img.selected {
-        outline: 2px solid #484848;
-        background-color: #e1e1e1;
       }
 
       @media (min-width: 768px) {
@@ -131,7 +160,7 @@
       }
 
       #controls {
-        /* display: none; */
+        display: none;
       }
 
       /* Accordion styles */
@@ -173,6 +202,58 @@
       .control-header.collapsed .toggle-icon {
         transform: rotate(-90deg);
       }
+
+      /* Instagram debug log panel */
+      #igLogPanel {
+        position: fixed;
+        left: 12px;
+        bottom: 12px;
+        width: min(90vw, 360px);
+        max-height: 40vh;
+        background: rgba(0, 0, 0, 0.75);
+        color: #eee;
+        border: 1px solid rgba(255, 255, 255, 0.15);
+        border-radius: 8px;
+        padding: 8px;
+        z-index: 10000;
+        font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+        font-size: 11px;
+        display: none;
+      }
+      #igLogPanel header {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 6px;
+        margin-bottom: 6px;
+      }
+      #igLogPanel header .btns button {
+        font-size: 11px;
+        padding: 4px 8px;
+        border-radius: 6px;
+        border: 1px solid rgba(255, 255, 255, 0.25);
+        background: rgba(255, 255, 255, 0.08);
+        color: #fff;
+      }
+      #igLogPanel pre {
+        margin: 0;
+        white-space: pre-wrap;
+        word-break: break-word;
+        overflow: auto;
+        max-height: 30vh;
+      }
+      #igLogToggle {
+        position: fixed;
+        left: 12px;
+        bottom: 12px;
+        z-index: 10001;
+        font-size: 12px;
+        padding: 6px 10px;
+        border-radius: 8px;
+        border: 1px solid rgba(0, 0, 0, 0.2);
+        background: rgba(255, 255, 255, 0.85);
+        color: #111;
+      }
     </style>
   </head>
   <body class="stencils">
@@ -186,7 +267,7 @@
 
         <div class="hud">
           <button class="reset-btn">Reset</button>
-          <button class="post-btn">Post</button>
+          <button id="postBtn" class="post-btn">Post</button>
         </div>
 
         <div class="spray-cans">
@@ -230,14 +311,8 @@
 
           <div class="control-group">
             <label for="nozzleSlider">Nozzle Size:</label>
-            <input
-              type="range"
-              id="nozzleSlider"
-              min="2"
-              max="120"
-              value="15"
-            />
-            <span id="nozzleValue">15</span>
+            <input type="range" id="nozzleSlider" min="2" max="120" value="8" />
+            <span id="nozzleValue">8</span>
           </div>
 
           <div class="control-group">
@@ -404,6 +479,20 @@
           </div>
         </div>
       </div>
+      <!-- IG debug toggle & panel (optional) -->
+      <button id="igLogToggle" title="Toggle Instagram debug log">
+        IG Logs
+      </button>
+      <div id="igLogPanel">
+        <header>
+          <strong>Instagram Deep-Link Logs</strong>
+          <div class="btns">
+            <button id="igCopyLogs">Copy</button>
+            <button id="igClearLogs">Clear</button>
+          </div>
+        </header>
+        <pre id="igLogOutput"></pre>
+      </div>
     </div>
 
     <script src="js/spray.js"></script>
@@ -426,6 +515,177 @@
       document.addEventListener("DOMContentLoaded", function () {
         const header = document.querySelector(".control-header");
         header.classList.add("collapsed");
+
+        // --- IG logging helpers ---
+        const logs = (window.__igLogs = window.__igLogs || []);
+        const out = document.getElementById("igLogOutput");
+        const panel = document.getElementById("igLogPanel");
+        const toggleBtn = document.getElementById("igLogToggle");
+        const copyBtn = document.getElementById("igCopyLogs");
+        const clearBtn = document.getElementById("igClearLogs");
+        const igLog = (msg) => {
+          const ts = new Date().toISOString();
+          const line = `[${ts}] ${msg}`;
+          logs.push(line);
+          try {
+            console.log("[IG]", msg);
+          } catch (_) {}
+          if (out) out.textContent = logs.join("\n");
+        };
+        const copyLogs = async () => {
+          const text = logs.join("\n");
+          try {
+            await navigator.clipboard.writeText(text);
+            igLog("Copied logs to clipboard.");
+          } catch (e) {
+            const ta = document.createElement("textarea");
+            ta.value = text;
+            document.body.appendChild(ta);
+            ta.select();
+            try {
+              document.execCommand("copy");
+              igLog("Copied logs via fallback.");
+            } catch (_) {}
+            document.body.removeChild(ta);
+          }
+        };
+        const clearLogs = () => {
+          logs.length = 0;
+          if (out) out.textContent = "";
+        };
+        if (toggleBtn)
+          toggleBtn.addEventListener("click", () => {
+            panel.style.display =
+              panel.style.display === "none" ? "block" : "none";
+          });
+        if (copyBtn) copyBtn.addEventListener("click", copyLogs);
+        if (clearBtn) clearBtn.addEventListener("click", clearLogs);
+
+        igLog("DOMContentLoaded");
+        igLog(`UA=${navigator.userAgent}`);
+        document.addEventListener("visibilitychange", () =>
+          igLog(`visibilitychange hidden=${document.hidden}`)
+        );
+        window.addEventListener("pagehide", () => igLog("pagehide"));
+        window.addEventListener("blur", () => igLog("window blur"));
+        window.addEventListener("focus", () => igLog("window focus"));
+
+        // Attempt to open Instagram camera/library right after export
+        const exportBtn = document.getElementById("postBtn");
+        const detectIOS = () => {
+          const ua = navigator.userAgent || "";
+          const hasTouch = (navigator.maxTouchPoints || 0) > 0;
+          const iPhoneIPod = /iPhone|iPod/.test(ua);
+          const iPadClassic = /iPad/.test(ua);
+          const macTouchiPad =
+            ua.includes("Macintosh") && (navigator.maxTouchPoints || 0) > 1; // iPadOS masquerading as Mac
+          const iOSAltMobile =
+            /(CriOS|FxiOS|EdgiOS|GSA)/.test(ua) && /Mobile/.test(ua);
+          const desktopMac = /Macintosh|Mac OS X/.test(ua) && !hasTouch; // classic desktop
+          const isiOS =
+            (iPhoneIPod || iPadClassic || macTouchiPad || iOSAltMobile) &&
+            !desktopMac;
+          let rule = "unknown";
+          if (iPhoneIPod) rule = "iPhone|iPod";
+          else if (iPadClassic) rule = "iPad";
+          else if (macTouchiPad) rule = "Macintosh+iPad touch";
+          else if (iOSAltMobile)
+            rule = "Alt iOS UA (CriOS/FxiOS/EdgiOS/GSA)+Mobile";
+          else if (desktopMac) rule = "Desktop Mac (excluded)";
+          return { isiOS, rule };
+        };
+        const openInstagram = () => {
+          const ua = navigator.userAgent || "";
+          const { isiOS, rule } = detectIOS();
+          const isAndroid = /Android/.test(ua);
+          const iosStore = "https://apps.apple.com/app/instagram/id389801252";
+          const androidStore =
+            "https://play.google.com/store/apps/details?id=com.instagram.android";
+
+          igLog(`ua=${ua}`);
+          igLog(`detect: isiOS=${isiOS} (rule=${rule}) isAndroid=${isAndroid}`);
+
+          // small delay to let the image finish saving so it appears first
+          setTimeout(() => {
+            if (isiOS) {
+              igLog("iOS detected. Attempting instagram://camera");
+              const beforeHidden = document.hidden;
+              window.location.href = "instagram://camera";
+              setTimeout(() => {
+                igLog(
+                  `post-deeplink hidden=${document.hidden} (before=${beforeHidden})`
+                );
+                setTimeout(() => {
+                  if (!document.hidden) {
+                    igLog("App likely not opened, redirecting to App Store");
+                    window.location.href = iosStore;
+                  } else {
+                    igLog(
+                      "Likely switched to Instagram app successfully (hidden=true)"
+                    );
+                  }
+                }, 1200);
+              }, 1200);
+            } else if (isAndroid) {
+              // Prefer intent first — more reliable on modern Chrome/Android
+              igLog("Android detected. Attempting intent:// to Instagram");
+              let opened = false;
+              const onVis = () => {
+                if (document.hidden) {
+                  igLog(
+                    "visibilitychange hidden=true (Android) → likely opened IG"
+                  );
+                  opened = true;
+                  document.removeEventListener("visibilitychange", onVis);
+                }
+              };
+              document.addEventListener("visibilitychange", onVis);
+
+              const intentUrl =
+                "intent://camera/#Intent;scheme=instagram;package=com.instagram.android;end";
+              const a = document.createElement("a");
+              a.href = intentUrl;
+              a.rel = "noopener";
+              document.body.appendChild(a);
+              a.click();
+              document.body.removeChild(a);
+
+              setTimeout(() => {
+                igLog(
+                  `post-deeplink (intent) hidden=${document.hidden} opened=${opened}`
+                );
+                if (opened || document.hidden) return;
+
+                // Second attempt: scheme link
+                igLog("Falling back to instagram://camera on Android");
+                const beforeHiddenScheme = document.hidden;
+                window.location.href = "instagram://camera";
+                setTimeout(() => {
+                  igLog(
+                    `post-deeplink (scheme) hidden=${document.hidden} (before=${beforeHiddenScheme})`
+                  );
+                  if (opened || document.hidden) return;
+
+                  // Final fallback to Play Store (market then https)
+                  igLog("Redirecting to Play Store (market:// then https)");
+                  const marketUrl = "market://details?id=com.instagram.android";
+                  window.location.href = marketUrl;
+                  setTimeout(() => {
+                    if (!document.hidden) window.location.href = androidStore;
+                  }, 1200);
+                }, 900);
+              }, 900);
+            }
+          }, 600);
+        };
+
+        if (exportBtn) {
+          exportBtn.addEventListener("click", () => {
+            // The actual PNG export is handled in JS; we only deep-link IG after click
+            igLog("Export clicked → scheduling IG open");
+            openInstagram();
+          });
+        }
       });
     </script>
   </body>
