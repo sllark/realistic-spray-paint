@@ -627,22 +627,10 @@
                 }, 1200);
               }, 1200);
             } else if (isAndroid) {
-              // Prefer intent first — more reliable on modern Chrome/Android
-              igLog("Android detected. Attempting intent:// to Instagram");
-              let opened = false;
-              const onVis = () => {
-                if (document.hidden) {
-                  igLog(
-                    "visibilitychange hidden=true (Android) → likely opened IG"
-                  );
-                  opened = true;
-                  document.removeEventListener("visibilitychange", onVis);
-                }
-              };
-              document.addEventListener("visibilitychange", onVis);
-
+              // Android fallback: prefer intent link as requested, then scheme
+              igLog("Android detected. Trying intent://com.instagram.android first");
               const intentUrl =
-                "intent://camera/#Intent;scheme=instagram;package=com.instagram.android;end";
+                "intent://com.instagram.android/some/path/#Intent;package=com.instagram.android;scheme=https;end";
               const a = document.createElement("a");
               a.href = intentUrl;
               a.rel = "noopener";
@@ -651,30 +639,19 @@
               document.body.removeChild(a);
 
               setTimeout(() => {
-                igLog(
-                  `post-deeplink (intent) hidden=${document.hidden} opened=${opened}`
-                );
-                if (opened || document.hidden) return;
-
-                // Second attempt: scheme link
-                igLog("Falling back to instagram://camera on Android");
+                if (document.hidden) {
+                  igLog("intent seemed to switch (hidden=true)");
+                  return;
+                }
+                igLog("Intent did not switch; trying instagram://camera");
                 const beforeHiddenScheme = document.hidden;
                 window.location.href = "instagram://camera";
                 setTimeout(() => {
                   igLog(
                     `post-deeplink (scheme) hidden=${document.hidden} (before=${beforeHiddenScheme})`
                   );
-                  if (opened || document.hidden) return;
-
-                  // Final fallback to Play Store (market then https)
-                  igLog("Redirecting to Play Store (market:// then https)");
-                  const marketUrl = "market://details?id=com.instagram.android";
-                  window.location.href = marketUrl;
-                  setTimeout(() => {
-                    if (!document.hidden) window.location.href = androidStore;
-                  }, 1200);
                 }, 900);
-              }, 900);
+              }, 800);
             }
           }, 600);
         };
