@@ -128,7 +128,7 @@ class SprayPaint {
     this.TAIL_HOOK_STRENGTH = 0.6; // 0..1 — curvature of the tail (randomized per drip)
     this.TAIL_BEAD_CHANCE = 0.35; // 0..1 — chance of a tiny bead at the very tip
 
-    this.GOLD_DRIP_ALPHA_GAIN = 1.12; // +12% density for gold drips
+    this.GOLD_DRIP_ALPHA_GAIN = 0.98; // +?% density for gold drips
     this.GOLD_GLAZE = 0.26; // strength of warm multiply glaze
     this.metallicShimmerDrip = true; // enable subtle metallic shimmer on drips
 
@@ -136,6 +136,7 @@ class SprayPaint {
     this._dripUID = 0;                 // running ID
     this._cssScaleX = 1;               // updated before drawing
     this._cssScaleY = 1;
+    this._cssDensityComp = 1;          // touch density normalization
 
     this.dpr = window.devicePixelRatio || 1;  // once, e.g., in constructor or resizeCanvas
 
@@ -148,6 +149,11 @@ class SprayPaint {
 
     // --- device / input hints for gold handling ---
     this.isTouch = ('ontouchstart' in window) || (navigator.maxTouchPoints > 0);
+
+    // --- gold debug flags/state ---
+    this.debugGold = true; // master switch for gold/touch diagnostics
+    this._dbgLast = { stamp: 0, grain: 0, over: 0, brush: 0 };
+    this._dbgStrokeId = 0;
 
   }
 
@@ -223,9 +229,9 @@ class SprayPaint {
     if (!this.isGoldColor(this.color)) return;
 
     // Tunables (tight link to spray look)
-    const GLZ = 0.14; // warm glaze strength (0.08–0.14)
-    const SH1 = 0.13; // primary highlight (0.04–0.08)
-    const SH2 = 0.035; // secondary reflection (0.02–0.05)
+    const GLZ = 0.09; // warm glaze strength (0.08–0.14)
+    const SH1 = 0.18; // primary highlight (0.04–0.08)
+    const SH2 = 0.05; // secondary reflection (0.02–0.05)
     const OFF1 = 0.34; // primary highlight offset (fraction of R)
     const OFF2 = 0.7; // secondary highlight offset
     const SHR = 0.86; // highlight radius scale
@@ -258,6 +264,25 @@ class SprayPaint {
     ctx.globalAlpha = SH2;
     const R2 = Math.max(0.5, R * SHR2);
     ctx.drawImage(this.getBrush(R2), x - R2 + offX2, y - R2 - offY2);
+    ctx.restore();
+
+    // 3b) Metallic sheen to lift center tone
+    ctx.save();
+    ctx.globalCompositeOperation = "screen";
+    ctx.globalAlpha = 0.08;
+    const sheen = ctx.createRadialGradient(
+      x - R * 0.12,
+      y - R * 0.18,
+      0,
+      x,
+      y,
+      R * 1.05
+    );
+    sheen.addColorStop(0.0, "rgba(255,240,210,0.75)");
+    sheen.addColorStop(0.45, "rgba(255,228,170,0.28)");
+    sheen.addColorStop(1.0, "rgba(255,228,170,0.0)");
+    ctx.fillStyle = sheen;
+    ctx.fillRect(x - R, y - R, R * 2, R * 2);
     ctx.restore();
 
     // 4) Tiny micro-sparkle (rare + very faint; avoids glitter)
@@ -419,6 +444,7 @@ class SprayPaint {
   // variant: "spray" | "drip"
   createMetallicBrush(ctx, radius, baseRadius, dpr, variant = "spray") {
     const cx = radius, cy = radius;
+    const _nowDbg = performance.now();
 
     // Helper
     const rgba = (hex, a = 1) => {
@@ -435,16 +461,16 @@ class SprayPaint {
 
       // Body: higher core density + slightly faster edge falloff
       const g = ctx.createRadialGradient(cx, cy, 0, cx, cy, radius);
-      g.addColorStop(0.00, rgba(gold, 1.00 * this.GOLD_DRIP_ALPHA_GAIN)); // richer center
-      g.addColorStop(Math.min(0.65, this.softness * 0.75), rgba(gold, 0.96));
-      g.addColorStop(1.00, rgba(gold, 0.06));
+      g.addColorStop(0.00, rgba(gold, 0.92));
+      g.addColorStop(Math.min(0.58, this.softness * 0.7), rgba(gold, 0.86));
+      g.addColorStop(1.00, rgba(gold, 0.12));
       ctx.fillStyle = g;
       ctx.fillRect(0, 0, ctx.canvas.width, ctx.canvas.height);
 
       // Warm multiply glaze to match sprayed midtone depth
       ctx.globalCompositeOperation = "multiply";
       const warm = ctx.createRadialGradient(cx, cy, 0, cx, cy, radius);
-      warm.addColorStop(0.0, rgba("#D6A84E", this.GOLD_GLAZE * 1.1)); // +10% vs spray
+      warm.addColorStop(0.0, rgba("#D6A84E", this.GOLD_GLAZE * 0.65));
       warm.addColorStop(1.0, rgba("#D6A84E", 0.0));
       ctx.fillStyle = warm;
       ctx.fillRect(0, 0, ctx.canvas.width, ctx.canvas.height);
@@ -452,13 +478,17 @@ class SprayPaint {
       // Subtle spec band (reduced so drips don’t look “light gold”)
       ctx.globalCompositeOperation = "screen";
       const band = ctx.createRadialGradient(cx * 0.78, cy * 0.72, 0, cx, cy, radius * 0.6);
-      band.addColorStop(0.0, rgba("#FFF8DC", 0.035));
-      band.addColorStop(0.45, rgba("#FFD700", 0.028));
+      band.addColorStop(0.0, rgba("#FFF8DC", 0.08));
+      band.addColorStop(0.45, rgba("#FFD700", 0.05));
       band.addColorStop(1.0, rgba("#FFD700", 0.0));
       ctx.fillStyle = band;
       ctx.fillRect(0, 0, ctx.canvas.width, ctx.canvas.height);
 
       ctx.globalCompositeOperation = "source-over";
+      if (this.debugGold && _nowDbg - (this._dbgLast.brush || 0) > 800) {
+        console.log(`[GOLD-BRUSH] variant=drip dpr=${dpr} isTouch=${this.isTouch}`);
+        this._dbgLast.brush = _nowDbg;
+      }
       return;
     }
 
@@ -505,6 +535,12 @@ class SprayPaint {
       }
 
       ctx.globalCompositeOperation = "source-over";
+      if (this.debugGold && _nowDbg - (this._dbgLast.brush || 0) > 800) {
+        console.log(
+          `[GOLD-BRUSH] variant=spray dpr=${dpr} isTouch=${this.isTouch} touchAtten=${touchAtten}`
+        );
+        this._dbgLast.brush = _nowDbg;
+      }
       return;
     }
 
@@ -566,8 +602,17 @@ class SprayPaint {
 
     const Rz = z * Math.tan(theta);
     const sigma = Math.max(0.6, (z / 15) * (Dn / this.Dref) * 1.5);
-    const alphaScale = (this.opacity * p) / (0.02 * z * z + 1);
-    const scatterRadius = Rz * this.scatterRadiusMultiplier;
+    const densityFactor = this._goldTouchDensityFactor();
+    const touchAlphaFactor =
+      this.isTouch && this.isGoldColor(this.color) ? 0.5 : 1;
+    let alphaScale = (this.opacity * p) / (0.02 * z * z + 1);
+    if (densityFactor < 1) {
+      alphaScale *= densityFactor * touchAlphaFactor;
+    }
+    let scatterRadius = Rz * this.scatterRadiusMultiplier;
+    if (densityFactor < 1) {
+      scatterRadius *= Math.max(0.7, densityFactor * 1.15);
+    }
     return { theta, Rz, sigma, alphaScale, scatterRadius };
   }
 
@@ -599,6 +644,22 @@ class SprayPaint {
 
   clamp(x, a, b) {
     return Math.max(a, Math.min(b, x));
+  }
+
+  _goldTouchDensityFactor() {
+    if (!this.isGoldColor(this.color)) return 1;
+    if (!this.isTouch) return 1;
+    const areaScale =
+      this._cssDensityComp ||
+      ((this._cssScaleX || 1) * (this._cssScaleY || 1));
+    const clampedArea = Math.max(0.05, Math.min(1, areaScale || 1));
+    return Math.max(0.3, Math.sqrt(clampedArea));
+  }
+
+  _goldTouchCountScale() {
+    const d = this._goldTouchDensityFactor();
+    if (d >= 1) return 1;
+    return Math.max(0.45, Math.min(1, d * 1.05));
   }
 
   calculateGrainSize(baseRadius, _size, params) {
@@ -650,7 +711,15 @@ class SprayPaint {
     this._dripArmed = false;
     this._paintStartMs = performance.now();
     this._travelSinceStart = 0;
-  
+
+    if (this.debugGold) {
+      this._dbgStrokeId += 1;
+      console.log(
+        `[STROKE#${this._dbgStrokeId}] input=${this.isTouch ? 'touch' : 'mouse'} dpr=${this.dpr} ` +
+        `nozzle=${this.nozzleSize} flow=${this.flow} opacity=${this.opacity} softness=${this.softness}`
+      );
+    }
+
     // Start continuous spraying
     if (!this._sprayInterval) {
       this._sprayInterval = setInterval(() => {
@@ -797,14 +866,36 @@ class SprayPaint {
     const ch = this.canvas.clientHeight || this.canvas.height;
     this._cssScaleX = cw / this.canvas.width;
     this._cssScaleY = ch / this.canvas.height;
+    if (this.isTouch) {
+      const scaleX = Math.max(0.1, this._cssScaleX || 1);
+      const scaleY = Math.max(0.1, this._cssScaleY || 1);
+      this._cssDensityComp = Math.min(1, scaleX * scaleY);
+    } else {
+      this._cssDensityComp = 1;
+    }
   
     if (now - this.lastStampTime < this.stampInterval) return;
     this.lastStampTime = now;
   
-    const size = this.nozzleSize * (0.8 + this.pressure * 0.4);
-  
+    let size = this.nozzleSize * (0.8 + this.pressure * 0.4);
+    // touch size handled via density factors elsewhere
+
     // --- stationary dwell behavior ---
     const stationary = speed < this.V_SLOW * 0.3; // very slow/held in place
+    if (this.debugGold && this.isGoldColor(this.color)) {
+      const nowLog = now;
+      if (nowLog - (this._dbgLast.stamp || 0) > 300) { // ~3 logs/sec
+        const { alphaScale } = this.deriveSprayParams();
+        console.log(
+          `[GOLD-STAMP] t=${nowLog.toFixed(1)}ms speed=${speed.toFixed(1)} ` +
+          `stationary=${stationary} size=${(this.nozzleSize * (0.8 + this.pressure * 0.4)).toFixed(2)} ` +
+          `pressure=${this.pressure.toFixed(2)} alphaScale=${alphaScale.toFixed(3)} ` +
+          `oversprayStep=${this.oversprayStep.toFixed(1)} cssScale=(${this._cssScaleX.toFixed(2)},${this._cssScaleY.toFixed(2)}) ` +
+          `isTouch=${this.isTouch}`
+        );
+        this._dbgLast.stamp = nowLog;
+      }
+    }
     if (stationary) {
       // Time-based overspray emission
       if (now - (this._lastDwellOverAt || 0) >= this._oversprayTimeStepMs) {
@@ -818,6 +909,9 @@ class SprayPaint {
         let dwellWet = 0.045 * this.flow * (0.85 + 0.5 * this.pressure);
         if (this.nozzleSize <= 12) dwellWet *= 0.6;      // ↓ pooling tiny tips
         else if (this.nozzleSize < 20) dwellWet *= 0.8;  // mildly lower mid tips
+        if (this.isTouch && this.isGoldColor(this.color)) {
+          dwellWet *= Math.max(0.2, this._goldTouchDensityFactor() * 0.6);
+        }
         this._accumWet(x, y, dwellWet, this.V_SLOW, /*centerBias=*/ true);
         this._lastDwellWetAt = nowMs;
       }
@@ -850,6 +944,9 @@ class SprayPaint {
 createNoisyPath(x, y, size, speed = this.V_REF) {
   const params = this.deriveSprayParams();
   let { scatterRadius } = params;
+  const densityFactor = this._goldTouchDensityFactor();
+  const countScale = this._goldTouchCountScale();
+  const usingGoldTouch = this.isGoldColor(this.color) && this.isTouch;
 
   const thicknessK =
     typeof this._getThicknessScale === "function"
@@ -880,11 +977,35 @@ createNoisyPath(x, y, size, speed = this.V_REF) {
   );
 
   // small-nozzle tuning: ensure enough dots to look filled (but with smaller grains)
-  if (smallNozzle) {
-    const minDots = 70 + Math.floor(displayRadius * 1.2);
-    nDots = Math.max(minDots, nDots);
+  const rawMinDots = smallNozzle ? 70 + Math.floor(displayRadius * 1.2) : 0;
+  if (rawMinDots) {
+    nDots = Math.max(rawMinDots, nDots);
+  }
+
+  if (usingGoldTouch && countScale < 1) {
+    const scaledMin = rawMinDots
+      ? Math.max(18, Math.floor(rawMinDots * countScale))
+      : 0;
+    nDots = Math.max(
+      scaledMin,
+      Math.max(1, Math.floor(nDots * countScale))
+    );
   }
   if (nDots <= 0) return;
+
+  if (this.debugGold && this.isGoldColor(this.color)) {
+    const nowLog = performance.now();
+    if (nowLog - (this._dbgLast.grain || 0) > 350) {
+      console.log(
+        `[GOLD-GRAIN] speed=${speed.toFixed(1)} thicknessK=${thicknessK.toFixed(2)} ` +
+        `displayR=${displayRadius.toFixed(2)} nDots=${nDots} smallNozzle=${this.nozzleSize < 20} isTouch=${this.isTouch}` +
+        (usingGoldTouch
+          ? ` cssArea=${(this._cssDensityComp || 1).toFixed(2)} density=${densityFactor.toFixed(2)} countScale=${countScale.toFixed(2)}`
+          : "")
+      );
+      this._dbgLast.grain = nowLog;
+    }
+  }
 
   const phi = Math.PI * (3 - Math.sqrt(5)); // golden angle
   const baseOpacity = this.opacity;
@@ -931,7 +1052,17 @@ createNoisyPath(x, y, size, speed = this.V_REF) {
     const centerBias =
       1 - Math.pow(Math.min(1, r / Math.max(1e-3, displayRadius)), 1.35);
     const smallBoost = smallNozzle ? 0.96 + 0.18 * centerBias : 1.0;
-    dotOpacity *= (0.35 + 0.65 * dwell) * toneComp * smallBoost;
+    dotOpacity *= (0.65 + 0.35 * dwell) * toneComp * smallBoost;
+    if (usingGoldTouch && densityFactor < 1) {
+      dotOpacity *= Math.max(0.22, densityFactor * 0.7);
+    }
+    if (this.isGoldColor(this.color)) {
+      const dwellBoostFactor = this.isTouch ? 1.55 : 1.25;
+      const slowNorm = Math.min(1, speed / (this.V_SLOW * 0.55));
+      const dwellBoost = 1 + (1 - slowNorm) * dwellBoostFactor;
+      dotOpacity *= dwellBoost;
+    }
+    dotOpacity = Math.min(1.0, dotOpacity);
 
     // draw
     const b = this.getBrush(rndSize);
@@ -955,16 +1086,20 @@ createNoisyPath(x, y, size, speed = this.V_REF) {
     const G = smallNozzle ? 70 : 100; // was 115 for small; now much lower
     const shouldAccum = smallNozzle ? (i % 6 === 0) : ((i & 3) === 0);
     if (shouldAccum) {
-      const wet =
+      let wet =
         ((G * dotOpacity * (rndSize * rndSize)) / normNozzleArea) *
         (0.8 + 0.6 * this.pressure) *
         this.flow;
+      if (usingGoldTouch && densityFactor < 1) {
+        wet *= Math.max(0.2, densityFactor * 0.65);
+      }
       this._accumWet(dotX, dotY, wet, speed);
       this._trySpawnDripAt(dotX, dotY, speed);
     }
   }
 
   this.ctx.restore();
+
 }
   // --- helper: draw a tiny "blobby" dot made of 1–4 overlapping sub-dots ---
   _drawDotCluster(cx, cy, baseR, tangentAngle = 0) {
@@ -1015,9 +1150,15 @@ createNoisyPath(x, y, size, speed = this.V_REF) {
 
     // precompute physical params
     const { Rz, alphaScale } = this.deriveSprayParams();
+    const densityFactor = this._goldTouchDensityFactor();
+    const countScale = this._goldTouchCountScale();
+    const usingGoldTouch = this.isGoldColor(this.color) && this.isTouch;
 
     // halo radius (how far overspray extends). Grows with nozzle & distance, gently clamped.
-    const haloR = Math.min(Math.max(size * 1.05, 2.0 * Rz), size * 2.1);
+    let haloR = Math.min(Math.max(size * 1.05, 2.0 * Rz), size * 2.1);
+    if (usingGoldTouch && densityFactor < 1) {
+      haloR *= Math.max(0.85, densityFactor * 1.15);
+    }
 
     // motion orientation (for gentle tangent bias of clusters)
     const vx = this.currentX - this.lastX;
@@ -1043,7 +1184,28 @@ createNoisyPath(x, y, size, speed = this.V_REF) {
     let count = Math.floor(
       baseCount * nozzleFactor * knob * press * (0.6 + 0.8 * alphaScale)
     );
-    count = Math.max(18, Math.min(240, count));
+    if (usingGoldTouch && countScale < 1) {
+      count = Math.max(1, Math.floor(count * countScale));
+    }
+    const minCount =
+      usingGoldTouch && countScale < 1
+        ? Math.max(6, Math.floor(18 * countScale))
+        : 18;
+    count = Math.max(minCount, Math.min(240, count));
+
+    if (this.debugGold && this.isGoldColor(this.color)) {
+      const nowLog = performance.now();
+      if (nowLog - (this._dbgLast.over || 0) > 500) {
+        console.log(
+          `[GOLD-OVER] haloR=${haloR.toFixed(2)} count=${count} ` +
+          `alphaScale=${alphaScale.toFixed(3)} isTouch=${this.isTouch}` +
+          (usingGoldTouch
+            ? ` cssArea=${(this._cssDensityComp || 1).toFixed(2)} density=${densityFactor.toFixed(2)} countScale=${countScale.toFixed(2)}`
+            : "")
+        );
+        this._dbgLast.over = nowLog;
+      }
+    }
 
     // HiDPI-friendly smoothing
     this.ctx.imageSmoothingEnabled = true;
@@ -1090,6 +1252,9 @@ createNoisyPath(x, y, size, speed = this.V_REF) {
         (0.1 + 0.55 * this.oversprayMultiplier) * // user knob
         (0.7 + 0.45 * (1 - rNorm)) * // center bias
         alphaScale;
+      if (usingGoldTouch && densityFactor < 1) {
+        aPix *= Math.max(0.12, densityFactor * 0.55);
+      }
 
       // mixture: 65% faint, 28% medium, 6% strong, 1% very dark
       const m = Math.random();
@@ -1335,11 +1500,22 @@ createNoisyPath(x, y, size, speed = this.V_REF) {
     // slightly less aggressive overall
     const gain = (0.8 + 0.4 * this.flow) * (0.7 + 0.5 * this.pressure);
     let add = amount * gain;
-  
+    const isGold = this.isGoldColor(this.color);
+    const density = this._goldTouchDensityFactor && this.isTouch
+      ? Math.max(0.18, this._goldTouchDensityFactor())
+      : 1;
+    if (isGold) {
+      const touchBoost = this.isTouch ? Math.min(4.0, 2.8 / density) : 1.45;
+      add *= touchBoost;
+    }
+
     // nozzle-conditioned effective cap
     let Wcap = this.W_CAP; // default per-cell wetness cap (e.g., 0.9)
     if (this.nozzleSize <= 12) Wcap *= 0.8;      // tighter for tiny tips
     else if (this.nozzleSize < 20) Wcap *= 0.9;  // slightly tighter for mid
+    if (isGold) {
+      Wcap *= this.isTouch ? 1.45 : 1.2;         // allow more wetness reserve for gold
+    }
   
     const wet = this.paintBuf[idx];
     const left = Math.max(0, 1 - wet / Wcap);
@@ -1395,6 +1571,9 @@ createNoisyPath(x, y, size, speed = this.V_REF) {
     // block any spawning until paint is armed (prevents first-paint drips)
     if (!this._dripArmed) return;
   
+    const isGold = this.isGoldColor(this.color);
+    const isGoldTouch = this.isTouch && isGold;
+
     const cx = (x / this.bufScale) | 0;
     const cy = (y / this.bufScale) | 0;
     if (cx < 0 || cy < 0 || cx >= this.bufW || cy >= this.bufH) return;
@@ -1407,17 +1586,23 @@ createNoisyPath(x, y, size, speed = this.V_REF) {
     const midNoz   = nozzle > 12 && nozzle < 20;
   
     // movement gating (base)
-    if (speed > this.V_SLOW * 1.2) return;
-    if (speed > this.V_SLOW * 0.7) { this.paintBuf[idx] *= 0.98; return; }
-  
+    const slowCap = this.V_SLOW * (isGoldTouch ? 1.5 : isGold ? 1.3 : 1.2);
+    if (speed > slowCap) return;
+    const soften = isGoldTouch ? 0.82 : isGold ? 0.92 : 1.0;
+    if (speed > this.V_SLOW * (0.7 * soften)) { this.paintBuf[idx] *= 0.98; return; }
+
     // extra strict for very small nozzles: must be near-stationary
-    if (smallNoz && speed > this.V_SLOW * 0.35) return;
-  
+    if (smallNoz && speed > this.V_SLOW * (isGoldTouch ? 0.55 : isGold ? 0.42 : 0.35)) return;
+
     // dynamic thresholds (tightened for smaller nozzles)
     const slowFactor = Math.min(1.6, this.V_SLOW / Math.max(20, speed));
-    const nozzleTighten = smallNoz ? 1.35 : (midNoz ? 1.15 : 1.0); // ↑ means harder
-    const needCenter = this.DRIP_THRESHOLD * slowFactor * nozzleTighten;
-    const needPool   = this.NBR_MIN       * slowFactor * nozzleTighten;
+    const baseTighten = smallNoz ? 1.35 : (midNoz ? 1.15 : 1.0); // ↑ means harder
+    const tightenAdj = isGoldTouch ? 0.82 : isGold ? 0.9 : 1.0;
+    const nozzleTighten = baseTighten * tightenAdj;
+    const centerScale = isGoldTouch ? 0.7 : isGold ? 0.82 : 1.0;
+    const poolScale   = isGoldTouch ? 0.68 : isGold ? 0.85 : 1.0;
+    const needCenter = this.DRIP_THRESHOLD * slowFactor * nozzleTighten * centerScale;
+    const needPool   = this.NBR_MIN       * slowFactor * nozzleTighten * poolScale;
   
     // 3×3 pooled wetness
     let pool = 0;
@@ -1433,13 +1618,22 @@ createNoisyPath(x, y, size, speed = this.V_REF) {
     const centerWet = this.paintBuf[idx];
     const trigger = 0.55 * (centerWet / needCenter) + 0.45 * (pool / needPool);
   
-    if (trigger < 0.9) return;
-    if (speed > this.V_SLOW * 0.5 && trigger < 1.1) return;
-  
+    const triggerFloor = isGoldTouch ? 0.7 : isGold ? 0.83 : 0.9;
+    if (trigger < triggerFloor) return;
+    const slopeGate = isGoldTouch ? 0.65 : isGold ? 0.6 : 0.5;
+    const triggerGate = isGoldTouch ? 1.0 : isGold ? 1.05 : 1.1;
+    if (speed > this.V_SLOW * slopeGate && trigger < triggerGate) return;
+
     // probability curve (reduced for small/mid nozzles)
-    let spawnProb = Math.pow(trigger - 0.9, 3.0) * 3.2;
-    if (smallNoz) spawnProb *= 0.6;
-    else if (midNoz) spawnProb *= 0.85;
+    const triggerBoost = isGoldTouch
+      ? Math.max(0, trigger - 0.66)
+      : isGold
+      ? Math.max(0, trigger - 0.78)
+      : Math.max(0, trigger - 0.9);
+    let spawnProb = Math.pow(triggerBoost, isGold ? 2.4 : 3.0) *
+      (isGoldTouch ? 5.2 : isGold ? 3.8 : 3.2);
+    if (smallNoz) spawnProb *= isGoldTouch ? 1.35 : isGold ? 1.15 : 0.6;
+    else if (midNoz) spawnProb *= isGoldTouch ? 1.2 : isGold ? 1.05 : 0.85;
     spawnProb = Math.min(1.0, spawnProb);
     if (Math.random() > spawnProb) return;
   
@@ -1472,15 +1666,16 @@ createNoisyPath(x, y, size, speed = this.V_REF) {
         const k = yy * this.bufW + xx;
         if (this._spawnCooldown[k] > 0) return;
         const last = this._lastSpawnAt[k] || 0;
-        const minInterval = this.MIN_SPAWN_INTERVAL_MS *
+        const baseInterval = this.MIN_SPAWN_INTERVAL_MS *
           (smallNoz ? 2.2 : midNoz ? 1.5 : 1.0);
+        const minInterval = baseInterval * (isGoldTouch ? 0.55 : isGold ? 0.8 : 1.0);
         if (now - last < minInterval) return;
       }
     }
-  
+
     // global debounce for very small nozzles (avoid twin spawns)
     if (smallNoz) {
-      const MIN_GLOBAL_GAP = 260; // ↑ from 180ms
+      const MIN_GLOBAL_GAP = isGoldTouch ? 140 : isGold ? 220 : 260; // ↑ from 180ms
       if (now - (this._lastSpawnGlobalAt || 0) < MIN_GLOBAL_GAP) return;
     }
   
