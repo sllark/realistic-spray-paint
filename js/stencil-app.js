@@ -717,7 +717,7 @@ class StencilApp {
         ? scaleOverride
         : Math.max(0.05, Math.min(2.5, computedScale));
     console.log("defaultScale", defaultScale);
-    const defaultRotationDeg = { girl: -15, heart: 5, "heart-string": -8 };
+    // const defaultRotationDeg = { girl: -15, heart: 5, "heart-string": -8 };
     const inst = {
       id,
       assetKey,
@@ -725,7 +725,7 @@ class StencilApp {
       x,
       y,
       scale: defaultScale,
-      rotation: ((defaultRotationDeg[assetKey] ?? 0) * Math.PI) / 180,
+      rotation: 0,
       maskCanvas: null,
     };
     inst.maskCanvas = this.buildMaskCanvas(inst);
