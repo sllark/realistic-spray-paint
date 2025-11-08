@@ -169,10 +169,7 @@ class StencilApp {
     const exportPNGBtn = document.querySelector(".post-btn");
     if (exportPNGBtn) {
       exportPNGBtn.addEventListener("click", () => {
-        const a = document.createElement("a");
-        a.download = "stencil-art.png";
-        a.href = this.paintCanvas.toDataURL("image/png");
-        a.click();
+        this.exportToPNG();
       });
     }
     const clipBtn = document.getElementById("clipToggle");
@@ -297,10 +294,7 @@ class StencilApp {
     const panelExportBtn = document.getElementById("exportBtn");
     if (panelExportBtn) {
       panelExportBtn.addEventListener("click", () => {
-        const a = document.createElement("a");
-        a.download = "stencil-art.png";
-        a.href = this.paintCanvas.toDataURL("image/png");
-        a.click();
+        this.exportToPNG();
       });
     }
 
@@ -383,10 +377,7 @@ class StencilApp {
     const postHudBtn = document.querySelector(".post-btn");
     if (postHudBtn) {
       postHudBtn.addEventListener("click", () => {
-        const a = document.createElement("a");
-        a.download = "stencil-art.png";
-        a.href = this.paintCanvas.toDataURL("image/png");
-        a.click();
+        this.exportToPNG();
       });
     }
 
@@ -489,12 +480,53 @@ class StencilApp {
 
     // Begin background composite loop for drips
     this.startCompositeLoop();
+  }
 
-    // Make sure drips are enabled by default
-    this.spray.dripsEnabled = true;
-    // Slightly more permissive defaults to see drips easier
-    this.spray.setDripThreshold(59);
-    this.spray.setFlow(120);
+  // Export canvas to PNG - uses Web Share API on iOS for direct Photos save
+  async exportToPNG() {
+    const canvas = this.paintCanvas;
+    const filename = "stencil-art.png";
+
+    // Check if we're on iOS and Web Share API is available
+    const isIOS =
+      /iPad|iPhone|iPod/.test(navigator.userAgent) ||
+      (navigator.platform === "MacIntel" && navigator.maxTouchPoints > 1);
+    const supportsWebShare = navigator.share && navigator.canShare;
+
+    if (isIOS && supportsWebShare) {
+      try {
+        // Convert canvas to blob
+        const blob = await new Promise((resolve) => {
+          canvas.toBlob((blob) => resolve(blob), "image/png");
+        });
+
+        if (blob) {
+          // Create a File object for sharing
+          const file = new File([blob], filename, { type: "image/png" });
+
+          // Use Web Share API - this will show the share sheet with "Save to Photos" option
+          if (navigator.canShare({ files: [file] })) {
+            await navigator.share({
+              files: [file],
+              title: "Stencil Art",
+              text: "Check out my stencil art!",
+            });
+            return; // Successfully shared
+          }
+        }
+      } catch (error) {
+        // User cancelled or share failed, fall through to download
+        if (error.name !== "AbortError") {
+          console.log("Share failed, falling back to download:", error);
+        }
+      }
+    }
+
+    // Fallback: standard download for non-iOS or if share fails
+    const a = document.createElement("a");
+    a.download = filename;
+    a.href = canvas.toDataURL("image/png");
+    a.click();
   }
 
   buildStencilTray() {

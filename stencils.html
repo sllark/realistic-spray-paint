@@ -147,10 +147,17 @@
       }
 
       .spray-cans img {
-        width: 45px;
+        width: 35px;
         height: auto;
+        object-fit: contain;
+        object-position: center bottom;
         cursor: pointer;
-        transition: box-shadow 0.2s ease, outline-color 0.2s ease;
+        transition: width 0.2s ease, height 0.2s ease;
+      }
+
+      .spray-cans img.selected {
+        width: 45px;
+      
       }
 
       @media (min-width: 768px) {
