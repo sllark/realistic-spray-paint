@@ -83,20 +83,32 @@ class StencilApp {
     this.spray.startDripLoop();
     this.spray.getDripCompositeMode = () => "source-over";
 
+    // Page-level configuration via <body data-*>
+    const bodyDs = (document.body && document.body.dataset) || {};
+    this.fixedStencilKey = bodyDs.fixedStencil || null; // e.g. "certificate"
+    this.lockedStencilMode =
+      bodyDs.lockStencil === "true" || Boolean(this.fixedStencilKey);
+
     // External PNG assets
     this.assetDefs = {
       girl: "assets/GIRL.png",
       heart: "assets/heart.png",
       "heart-string": "assets/heart-string.png",
     };
+    // Optionally include fixed-only assets without polluting the default tray
+    if (this.fixedStencilKey === "certificate") {
+      this.assetDefs.certificate = "assets/certificate-stencil.png";
+    }
     // Per-asset pass preference for paper-background scans:
     // 'dark' → dark ink passes (spray shows where dark), 'light' → light passes, 'auto' → decide by center
     this.assetPassPreference = {
       heart: "dark",
       "heart-string": "dark",
       girl: "dark",
+      certificate: "alpha",
     };
     this.assetBitmaps = {}; // key -> canvas with image drawn
+    this._derivedBitmaps = {}; // cache for cropped/derived bitmaps per mode
 
     this.resize = this.resize.bind(this);
     this.onTrayPointerDown = this.onTrayPointerDown.bind(this);
@@ -120,9 +132,8 @@ class StencilApp {
     this.buildStencilTray();
 
     // Wire tray interactions
-    document
-      .getElementById("stencilTray")
-      .addEventListener("pointerdown", this.onTrayPointerDown);
+    const trayEl = document.getElementById("stencilTray");
+    if (trayEl) trayEl.addEventListener("pointerdown", this.onTrayPointerDown);
 
     // Stage interactions
     const layers = [this.guideCanvas, this.strokeCanvas, this.paintCanvas];
@@ -137,33 +148,20 @@ class StencilApp {
       c.addEventListener("pointerleave", this.onPointerUp, { passive: false });
     });
 
+    // Fixed-stencil mode (single locked stencil, always clipped)
+    if (this.fixedStencilKey) {
+      this.clipToStencil = true;
+      const clipBtn = document.getElementById("clipToggle");
+      if (clipBtn) clipBtn.textContent = "Clip: On";
+      if (trayEl) trayEl.style.display = "none";
+      this.buildOrUpdateFixedStencil();
+    }
+
     // Controls (HUD buttons optional; main panel has clearBtn/exportBtn)
     const clearPaintBtn = document.querySelector(".reset-btn");
     if (clearPaintBtn) {
       clearPaintBtn.addEventListener("click", () => {
-        this.paintCtx.clearRect(
-          0,
-          0,
-          this.paintCanvas.width,
-          this.paintCanvas.height
-        );
-        // Clear stroke layer as well
-        this.strokeCtx.clearRect(
-          0,
-          0,
-          this.strokeCanvas.width,
-          this.strokeCanvas.height
-        );
-        // Remove all placed stencil instances and selection
-        this.instances = [];
-        this.selectedIds.clear();
-        // Unhide all tray images
-        const tray = document.getElementById("stencilTray");
-        if (tray)
-          Array.from(tray.querySelectorAll(".stencil-item")).forEach(
-            (el) => (el.style.visibility = "visible")
-          );
-        this.redrawGuides();
+        this.clearArtwork({ keepStencils: this.lockedStencilMode });
       });
     }
     const exportPNGBtn = document.querySelector(".post-btn");
@@ -266,29 +264,7 @@ class StencilApp {
     const panelClearBtn = document.getElementById("clearBtn");
     if (panelClearBtn) {
       panelClearBtn.addEventListener("click", () => {
-        // Clear layers
-        this.paintCtx.clearRect(
-          0,
-          0,
-          this.paintCanvas.width,
-          this.paintCanvas.height
-        );
-        this.strokeCtx.clearRect(
-          0,
-          0,
-          this.strokeCanvas.width,
-          this.strokeCanvas.height
-        );
-        // Refill paint layer background to keep the paper color
-        const w = this.paintCanvas.width,
-          h = this.paintCanvas.height;
-        this.paintCtx.save();
-        this.paintCtx.setTransform(this.dpr, 0, 0, this.dpr, 0, 0);
-        const bg = getComputedStyle(document.body).backgroundColor || "#e4e1ce";
-        this.paintCtx.fillStyle = bg;
-        this.paintCtx.fillRect(0, 0, w / this.dpr, h / this.dpr);
-        this.paintCtx.restore();
-        this.redrawGuides();
+        this.clearArtwork({ keepStencils: this.lockedStencilMode });
       });
     }
     const panelExportBtn = document.getElementById("exportBtn");
@@ -346,32 +322,7 @@ class StencilApp {
           panelClearBtnEl.click();
           return;
         }
-        // Fallback same as panel clear + refill
-        const w = this.paintCanvas.width,
-          h = this.paintCanvas.height;
-        this.paintCtx.clearRect(0, 0, w, h);
-        this.strokeCtx.clearRect(
-          0,
-          0,
-          this.strokeCanvas.width,
-          this.strokeCanvas.height
-        );
-        this.paintCtx.save();
-        this.paintCtx.setTransform(this.dpr, 0, 0, this.dpr, 0, 0);
-        const bg = getComputedStyle(document.body).backgroundColor || "#e4e1ce";
-        this.paintCtx.fillStyle = bg;
-        this.paintCtx.fillRect(0, 0, w / this.dpr, h / this.dpr);
-        this.paintCtx.restore();
-        // Remove all placed stencil instances and selection
-        this.instances = [];
-        this.selectedIds.clear();
-        // Unhide all tray images
-        const tray = document.getElementById("stencilTray");
-        if (tray)
-          Array.from(tray.querySelectorAll(".stencil-item")).forEach(
-            (el) => (el.style.visibility = "visible")
-          );
-        this.redrawGuides();
+        this.clearArtwork({ keepStencils: this.lockedStencilMode });
       });
     }
     const postHudBtn = document.querySelector(".post-btn");
@@ -484,7 +435,7 @@ class StencilApp {
 
   // Export canvas to PNG - uses Web Share API on iOS for direct Photos save
   async exportToPNG() {
-    const canvas = this.paintCanvas;
+    const canvas = this.createExportCanvas();
     const filename = "stencil-art.png";
 
     // Check if we're on iOS and Web Share API is available
@@ -527,6 +478,71 @@ class StencilApp {
     a.download = filename;
     a.href = canvas.toDataURL("image/png");
     a.click();
+  }
+
+  hasStageBackground() {
+    return Boolean(document.getElementById("stageBg"));
+  }
+
+  createExportCanvas() {
+    const bg = document.getElementById("stageBg");
+    if (!bg) return this.paintCanvas;
+    // If the background isn't loaded yet, fall back to paint only.
+    if (bg instanceof HTMLImageElement && !bg.complete) return this.paintCanvas;
+    const c = document.createElement("canvas");
+    c.width = this.paintCanvas.width;
+    c.height = this.paintCanvas.height;
+    const g = c.getContext("2d");
+    try {
+      g.drawImage(bg, 0, 0, c.width, c.height);
+    } catch (_) {}
+    g.drawImage(this.paintCanvas, 0, 0);
+    return c;
+  }
+
+  clearArtwork({ keepStencils = false } = {}) {
+    // Clear layers
+    this.paintCtx.clearRect(
+      0,
+      0,
+      this.paintCanvas.width,
+      this.paintCanvas.height
+    );
+    this.strokeCtx.clearRect(
+      0,
+      0,
+      this.strokeCanvas.width,
+      this.strokeCanvas.height
+    );
+    if (this.spray) this.spray._strokeDirty = false;
+
+    // If we don't have a stage background image, refill paint layer to keep paper color.
+    if (!this.hasStageBackground()) {
+      const w = this.paintCanvas.width,
+        h = this.paintCanvas.height;
+      this.paintCtx.save();
+      this.paintCtx.setTransform(this.dpr, 0, 0, this.dpr, 0, 0);
+      const bg = getComputedStyle(document.body).backgroundColor || "#e4e1ce";
+      this.paintCtx.fillStyle = bg;
+      this.paintCtx.fillRect(0, 0, w / this.dpr, h / this.dpr);
+      this.paintCtx.restore();
+    }
+
+    if (!keepStencils) {
+      // Remove all placed stencil instances and selection
+      this.instances = [];
+      this.selectedIds.clear();
+      // Unhide all tray images
+      const tray = document.getElementById("stencilTray");
+      if (tray)
+        Array.from(tray.querySelectorAll(".stencil-item")).forEach(
+          (el) => (el.style.visibility = "visible")
+        );
+    } else if (this.fixedStencilKey) {
+      // Ensure fixed stencil stays present
+      this.buildOrUpdateFixedStencil();
+    }
+    this.redrawGuides();
   }
 
   buildStencilTray() {
@@ -705,8 +721,15 @@ class StencilApp {
 
   resize() {
     const rect = this.paintCanvas.parentElement.getBoundingClientRect();
-    const w = Math.max(320, rect.width);
-    const h = Math.max(400, rect.height);
+    // In fixed/locked stencil mode (e.g. certificate page) the stage can be small on mobile.
+    // Do NOT apply the large minimums there, or canvases will become larger than the stage
+    // and the stencil/background will drift out of alignment.
+    const w = this.lockedStencilMode
+      ? Math.max(1, rect.width)
+      : Math.max(320, rect.width);
+    const h = this.lockedStencilMode
+      ? Math.max(1, rect.height)
+      : Math.max(400, rect.height);
     [this.paintCanvas, this.strokeCanvas, this.guideCanvas].forEach((c) => {
       const wasW = c.width,
         wasH = c.height;
@@ -718,13 +741,104 @@ class StencilApp {
       g.setTransform(this.dpr, 0, 0, this.dpr, 0, 0);
       if (c === this.paintCanvas && (wasW || wasH)) {
         // keep background color by filling; content is not preserved on resize
-        g.fillStyle = getComputedStyle(document.body).backgroundColor;
-        g.fillRect(0, 0, w, h);
+        // If the page provides a stage background image, keep paint transparent so the background shows through.
+        if (!this.hasStageBackground()) {
+          g.fillStyle = getComputedStyle(document.body).backgroundColor;
+          g.fillRect(0, 0, w, h);
+        }
       }
     });
     // Reset spray tool so its internal buffers match new canvas size
     this.rebuildSpray();
+    if (this.fixedStencilKey) this.buildOrUpdateFixedStencil();
     this.redrawGuides();
+  }
+
+  buildOrUpdateFixedStencil() {
+    const key = this.fixedStencilKey;
+    if (!key) return;
+    let bitmap = this.assetBitmaps[key];
+    if (!bitmap) return;
+
+    // Small-screen crop for certificate to keep visuals synced and better framed.
+    const isSmall =
+      typeof window !== "undefined" &&
+      window.matchMedia &&
+      window.matchMedia("(max-width: 768px)").matches;
+    if (key === "certificate" && isSmall) {
+      bitmap = this.getCroppedBitmap(key, {
+        top: 0.0575,
+        bottom: 0.0575,
+        left: 0.0256,
+        right: 0.0256,
+      });
+    }
+
+    const stageW = this.guideCanvas.width / this.dpr;
+    const stageH = this.guideCanvas.height / this.dpr;
+    const scale = Math.min(stageW / bitmap.width, stageH / bitmap.height);
+    const fixedId = `fixed:${key}`;
+    let inst = this.instances.find((i) => i.id === fixedId);
+    if (!inst) {
+      inst = {
+        id: fixedId,
+        assetKey: key,
+        bitmap,
+        x: stageW / 2,
+        y: stageH / 2,
+        scale,
+        rotation: 0,
+        maskCanvas: null,
+      };
+      inst.maskCanvas = this.buildMaskCanvas(inst);
+      this.instances = [inst];
+    } else {
+      inst.assetKey = key;
+      const bitmapChanged =
+        !inst.bitmap ||
+        inst.bitmap.width !== bitmap.width ||
+        inst.bitmap.height !== bitmap.height;
+      inst.bitmap = bitmap;
+      inst.x = stageW / 2;
+      inst.y = stageH / 2;
+      inst.scale = scale;
+      inst.rotation = 0;
+      if (!inst.maskCanvas || bitmapChanged)
+        inst.maskCanvas = this.buildMaskCanvas(inst);
+    }
+    // Never show transform handles in fixed mode.
+    if (this.lockedStencilMode) this.selectedIds.clear();
+  }
+
+  getCroppedBitmap(assetKey, crop) {
+    const src = this.assetBitmaps[assetKey];
+    if (!src) return src;
+    const c = crop || {};
+    const left = Math.max(0, Math.min(0.49, c.left || 0));
+    const right = Math.max(0, Math.min(0.49, c.right || 0));
+    const top = Math.max(0, Math.min(0.49, c.top || 0));
+    const bottom = Math.max(0, Math.min(0.49, c.bottom || 0));
+
+    const key = `${assetKey}|l${left}|r${right}|t${top}|b${bottom}|${src.width}x${src.height}`;
+    if (this._derivedBitmaps[key]) return this._derivedBitmaps[key];
+
+    const sw = src.width;
+    const sh = src.height;
+    const sx = Math.round(sw * left);
+    const ex = Math.round(sw * (1 - right));
+    const sy = Math.round(sh * top);
+    const ey = Math.round(sh * (1 - bottom));
+    const cw = Math.max(1, ex - sx);
+    const ch = Math.max(1, ey - sy);
+
+    const out = document.createElement("canvas");
+    out.width = cw;
+    out.height = ch;
+    const g = out.getContext("2d");
+    g.clearRect(0, 0, cw, ch);
+    g.drawImage(src, sx, sy, cw, ch, 0, 0, cw, ch);
+    this._derivedBitmaps[key] = out;
+    return out;
   }
 
   // Add a stencil instance
@@ -800,7 +914,7 @@ class StencilApp {
     ];
     const avgL = cs.reduce((s, v) => s + v.l, 0) / cs.length;
     const avgA = cs.reduce((s, v) => s + v.a, 0) / cs.length;
-    const likelyPaperWhite = avgA > 240 && avgL > 0.85; // opaque bright bg
+    let likelyPaperWhite = avgA > 240 && avgL > 0.85; // opaque bright bg
     // center luminance to decide whether the shape is dark-on-white or light-on-white
     const centerSamples = [
       sample((w / 2) | 0, (h / 2) | 0),
@@ -811,6 +925,12 @@ class StencilApp {
     ];
     const centerL =
       centerSamples.reduce((s, v) => s + v.l, 0) / centerSamples.length;
+
+    // Allow forcing alpha-mask mode for assets that have real transparency (e.g. stencil cutouts)
+    const prefOverride =
+      (this.assetPassPreference && this.assetPassPreference[inst.assetKey]) ||
+      null;
+    if (prefOverride === "alpha") likelyPaperWhite = false;
 
     if (likelyPaperWhite) {
       // Compute an Otsu threshold on luminance for crisp separation of paper vs ink
@@ -1012,6 +1132,26 @@ class StencilApp {
       e.target.setPointerCapture(e.pointerId);
     } catch (_) {}
     this.activePointers.set(e.pointerId, { x, y });
+
+    // Locked (fixed-stencil) mode: always paint; no selecting/moving/resizing.
+    if (this.lockedStencilMode) {
+      // Before we begin a new stroke: if there are pending drips on the stroke layer,
+      // bake them to the paint layer so clearing doesn't truncate them.
+      if (this.spray && this.spray._strokeDirty) {
+        try {
+          this.compositeStroke();
+          this.strokeCtx.clearRect(
+            0,
+            0,
+            this.strokeCanvas.width,
+            this.strokeCanvas.height
+          );
+          this.spray._strokeDirty = false;
+        } catch (_) {}
+      }
+      this.spray.startDrawing(x, y, 1.0);
+      return;
+    }
     // 1) If a selected stencil has a hovered handle, start transform instead of painting
     const selectedTop = [...this.instances]
       .reverse()
@@ -1254,7 +1394,11 @@ class StencilApp {
       g.translate(inst.x, inst.y);
       g.rotate(inst.rotation);
       g.scale(inst.scale, inst.scale);
-      g.globalAlpha = this.selectedIds.has(inst.id) ? 0.9 : 0.55;
+      g.globalAlpha = this.lockedStencilMode
+        ? 0.9
+        : this.selectedIds.has(inst.id)
+        ? 0.9
+        : 0.55;
       g.drawImage(inst.bitmap, -inst.bitmap.width / 2, -inst.bitmap.height / 2);
       g.restore();
 
