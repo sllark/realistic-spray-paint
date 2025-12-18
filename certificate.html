@@ -30,25 +30,29 @@
         font-family: "ArchimotoV01-Regular", system-ui, -apple-system, Segoe UI,
           Roboto, Helvetica, Arial, sans-serif;
         min-height: 100svh;
+        overflow: hidden;
       }
 
       #stencilApp {
         display: flex;
         flex-direction: column;
         justify-content: center;
+        align-items: center;
         padding-bottom: calc(env(safe-area-inset-bottom) + 60px);
         min-height: 100svh;
         height: 100svh;
+        width: 100vw;
+        overflow: hidden;
       }
 
       .stage {
         position: relative;
         flex: 0 0 auto;
         min-height: 0;
-        margin: 0 auto;
-        border-radius: 10px;
+        margin: 0;
+        border-radius: 0;
         /* overflow: hidden; */
-        box-shadow: 0 10px 30px rgba(0, 0, 0, 0.18);
+        box-shadow: none;
       }
 
       .stage-bg {
@@ -95,15 +99,15 @@
 
       .spray-cans {
         position: absolute;
-        right: 10px;
-        bottom: calc(env(safe-area-inset-bottom) - 145px);
+        left: 45px;
+        bottom: calc(env(safe-area-inset-bottom) + 45px);
         display: flex;
         gap: 10px;
         z-index: 5;
       }
 
       .spray-cans img {
-        width: 35px;
+        width: 20px;
         height: auto;
         object-fit: contain;
         object-position: center bottom;
@@ -112,9 +116,12 @@
       }
 
       .spray-cans img.selected {
-        width: 45px;
+        width: 30px;
       }
 
+      #guideCanvas{
+        opacity: 0.1;
+      }
       /* Small screens: keep cans smaller and OUTSIDE the canvas */
       @media (max-width: 768px) {
         .spray-cans {
@@ -129,6 +136,19 @@
         }
         .spray-cans img.selected {
           width: 32px;
+        }
+      }
+
+      /* Landscape fullscreen: avoid biasing the stage upward (keeps crop visually centered). */
+      @media (orientation: landscape) {
+        #stencilApp {
+          padding-bottom: 0;
+        }
+        .hud {
+          bottom: calc(env(safe-area-inset-bottom) + 10px);
+        }
+        .spray-cans {
+          bottom: calc(env(safe-area-inset-bottom) + 10px);
         }
       }
     </style>
@@ -149,11 +169,6 @@
         <canvas id="paintCanvas" class="stage-layer"></canvas>
         <canvas id="strokeCanvas" class="stage-layer"></canvas>
         <canvas id="guideCanvas" class="stage-layer"></canvas>
-
-        <div class="hud">
-          <button class="reset-btn">Reset</button>
-          <button class="post-btn">Export</button>
-        </div>
 
         <div class="spray-cans">
           <img
@@ -184,41 +199,29 @@
           const ey = Math.round(h * (1 - CROP_TB));
           return { sx, sy, sw: Math.max(1, ex - sx), sh: Math.max(1, ey - sy) };
         };
-        const fullAR = FULL_W / FULL_H;
         const cr = cropRect(FULL_W, FULL_H);
         const cropAR = cr.sw / cr.sh;
+        const TARGET_AR = 16 / 9; // force landscape 16:9 for stage + canvases
         const stage = document.getElementById("certificateStage");
         const bgCanvas = document.getElementById("stageBg");
         if (!stage) return;
 
         const bgImg = new Image();
-        // bgImg.src = "assets/certificate-stencil-bg.png";
-        bgImg.src = "assets/canvas-bg.png";
+        bgImg.src = "assets/certificate-stencil-bg.png";
+        // bgImg.src = "assets/canvas-bg.png";
 
         function fitStage() {
-          const isDesktop = window.matchMedia("(min-width: 1024px)").matches;
-          const isSmall = window.matchMedia("(max-width: 768px)").matches;
-          const AR = isSmall ? cropAR : fullAR;
-          const maxW = Math.min(
-            window.innerWidth * (isDesktop ? 0.9 : 0.95),
-            isDesktop ? 1280 : 820
-          );
-          // Leave a bit more room on small screens so fixed controls don't overlap the stage
-          const maxH =
-            window.innerHeight * (isDesktop ? 0.85 : isSmall ? 0.7 : 0.78);
+          // Force a 16:9 landscape viewport for the stage, bounded by window size.
+          const maxW = Math.max(1, window.innerWidth);
+          const maxH = Math.max(1, window.innerHeight);
           let w = maxW;
-          let h = w / AR;
+          let h = Math.round(w / TARGET_AR);
           if (h > maxH) {
             h = maxH;
-            w = h * AR;
+            w = Math.round(h * TARGET_AR);
           }
-          // Round in a way that preserves aspect ratio at pixel level
-          let wPx = Math.round(w);
-          let hPx = Math.round(wPx / AR);
-          if (hPx > maxH) {
-            hPx = Math.round(maxH);
-            wPx = Math.round(hPx * AR);
-          }
+          const wPx = Math.round(w);
+          const hPx = Math.round(h);
           stage.style.width = wPx + "px";
           stage.style.height = hPx + "px";
 
@@ -228,7 +231,6 @@
 
         function drawBg() {
           if (!bgCanvas) return;
-          const isSmall = window.matchMedia("(max-width: 768px)").matches;
           const dpr = Math.max(1, window.devicePixelRatio || 1);
           const w = Math.max(1, stage.clientWidth | 0);
           const h = Math.max(1, stage.clientHeight | 0);
@@ -242,12 +244,15 @@
           if (!bgImg.complete || !bgImg.naturalWidth) return;
           const srcW = bgImg.naturalWidth || FULL_W;
           const srcH = bgImg.naturalHeight || FULL_H;
-          const r = isSmall
-            ? cropRect(srcW, srcH)
-            : { sx: 0, sy: 0, sw: srcW, sh: srcH };
+          const r = cropRect(srcW, srcH);
           g.imageSmoothingEnabled = true;
           g.imageSmoothingQuality = "high";
           g.drawImage(bgImg, r.sx, r.sy, r.sw, r.sh, 0, 0, w, h);
+
+          // Notify StencilApp so it can capture a clean base and apply peel to stageBg too.
+          window.dispatchEvent(
+            new CustomEvent("stagebg:rendered", { detail: { canvas: bgCanvas } })
+          );
         }
 
         fitStage();

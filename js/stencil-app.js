@@ -6,6 +6,12 @@ class StencilApp {
     this.strokeCtx = this.strokeCanvas.getContext("2d");
     this.guideCanvas = document.getElementById("guideCanvas");
     this.guideCtx = this.guideCanvas.getContext("2d");
+    this.stageBgCanvas = document.getElementById("stageBg");
+    this.stageBgCtx =
+      this.stageBgCanvas && this.stageBgCanvas.getContext
+        ? this.stageBgCanvas.getContext("2d")
+        : null;
+    this._stageBgBase = null; // canvas in stage CSS px units
 
     this.dpr = Math.max(1, window.devicePixelRatio || 1);
 
@@ -35,7 +41,8 @@ class StencilApp {
       animToken: 0,
     };
     this.stencilRemoved = false;
-    this.paintTimeMs = 0;
+    this.paintTimeBlackMs = 0; // Track black paint time separately (min 7s)
+    this.paintTimeGoldMs = 0; // Track gold paint time separately (min 5s)
     this.peelHintUnlocked = false;
     this._strokeStartTs = 0;
     this._paintTimerLastTs = 0;
@@ -47,6 +54,17 @@ class StencilApp {
       phase: 0,
     };
     this._peelHintWasVisible = false;
+    this.peelBackImageUrl =
+      (document.body &&
+        document.body.dataset &&
+        document.body.dataset.peelBackImage) ||
+      null;
+    this.peelBackImage = null;
+    this.peelBackReady = false;
+    // Auto-peel: when enabled, a small drag triggers auto-complete + fade-out.
+    this.autoPeelEnabled = true; // set true to enable
+    this.autoPeelTriggerProgress = 0.12; // how far user must drag before auto completes
+    this.autoPeelFadeDurationMs = 1; // fade-out duration after peel completes
     // Default cursor reflecting selected can
     this._canCursor = null;
     this._makeCursorFromImage = (
@@ -150,8 +168,20 @@ class StencilApp {
     window.addEventListener("resize", this.resize);
     this.resize();
 
+    // Listen for certificate.html stageBg re-renders so we can capture a clean base image
+    // and re-apply peel hint/effect on top.
+    window.addEventListener("stagebg:rendered", (e) => {
+      try {
+        const canvas = e && e.detail && e.detail.canvas;
+        if (canvas) this.onStageBgRendered(canvas);
+      } catch (_) {}
+    });
+
     // Preload PNGs
     await this.loadAssets();
+
+    // Optional peel backside texture
+    this.loadPeelBackTexture();
 
     // Build the stencil tray and keep the stage empty on load
     this.buildStencilTray();
@@ -458,6 +488,32 @@ class StencilApp {
     this.startCompositeLoop();
     // Subtle animated hint for the peel corner in locked/certificate mode
     this.startPeelHintLoop();
+
+    // Fallback: if certificate.html rendered the background before our event listener was ready,
+    // capture the current stageBg contents as the base on the next frame.
+    if (this.stageBgCanvas) {
+      requestAnimationFrame(() => {
+        try {
+          this.onStageBgRendered(this.stageBgCanvas);
+        } catch (_) {}
+      });
+    }
+  }
+
+  loadPeelBackTexture() {
+    const url = this.peelBackImageUrl;
+    if (!url) return;
+    const img = new Image();
+    img.crossOrigin = "anonymous";
+    img.onload = () => {
+      this.peelBackImage = img;
+      this.peelBackReady = true;
+    };
+    img.onerror = () => {
+      this.peelBackImage = null;
+      this.peelBackReady = false;
+    };
+    img.src = url;
   }
 
   // Export canvas to PNG - uses Web Share API on iOS for direct Photos save
@@ -558,10 +614,13 @@ class StencilApp {
     // In fixed-stencil mode, "reset" should bring the stencil back even if it was peeled away.
     if (keepStencils && this.fixedStencilKey) {
       this.stencilRemoved = false;
-      this.paintTimeMs = 0;
+      this.paintTimeBlackMs = 0;
+      this.paintTimeGoldMs = 0;
       this.peelHintUnlocked = false;
       this._strokeStartTs = 0;
       this._paintTimerLastTs = 0;
+      // stage background should come back after reset in certificate mode
+      this.redrawStageBg();
       if (this.peelState) {
         this.peelState.instId = null;
         this.peelState.pointerId = null;
@@ -573,6 +632,8 @@ class StencilApp {
         this.peelState.dragging = false;
         this.peelState.removed = false;
         this.peelState.animToken = 0;
+        this.peelState.fadeAlpha = 1;
+        this.peelState.autoTriggered = false;
       }
     }
 
@@ -649,7 +710,7 @@ class StencilApp {
     this._compositeLoopRunning = true;
     const tick = () => {
       try {
-        // Track cumulative paint time across all strokes (including a single long stroke).
+        // Track cumulative paint time separately for black and gold colors.
         const now = performance.now();
         const prev = this._paintTimerLastTs || now;
         const dt = Math.max(0, now - prev);
@@ -661,16 +722,38 @@ class StencilApp {
           !this.stencilRemoved &&
           this.spray &&
           this.spray.isDrawing;
-        if (shouldTrackPaintTime) {
-          this.paintTimeMs += dt;
-          if (this.paintTimeMs >= 5000) {
+        if (shouldTrackPaintTime && this.spray.color) {
+          // Determine which color is being used (normalize to uppercase for comparison)
+          const color = this.spray.color.toUpperCase();
+          const isBlack = color === "#221F20" || color === "221F20";
+          const isGold = color === "#EAC677" || color === "EAC677";
+
+          if (isBlack) {
+            this.paintTimeBlackMs += dt;
+          } else if (isGold) {
+            this.paintTimeGoldMs += dt;
+          }
+
+          // Check if both minimums are met: 7s black, 5s gold
+          const blackMet = this.paintTimeBlackMs >= 6000;
+          const goldMet = this.paintTimeGoldMs >= 3000;
+
+          if (blackMet && goldMet && !this.peelHintUnlocked) {
             this.peelHintUnlocked = true;
             if (typeof window !== "undefined" && window.DEBUG_PEEL) {
               console.log(
                 "[peel] hint unlocked",
-                Math.round(this.paintTimeMs),
+                "black:",
+                Math.round(this.paintTimeBlackMs),
+                "ms",
+                "gold:",
+                Math.round(this.paintTimeGoldMs),
                 "ms"
               );
+            }
+            // Fire the peel-ready event
+            if (typeof window !== "undefined") {
+              window.dispatchEvent(new CustomEvent("stencil:peel-ready"));
             }
           }
         }
@@ -728,7 +811,8 @@ class StencilApp {
             !this._peelHintWasVisible
           ) {
             console.log("[peel] hint loop active", {
-              paintTimeMs: Math.round(this.paintTimeMs || 0),
+              paintTimeBlackMs: Math.round(this.paintTimeBlackMs || 0),
+              paintTimeGoldMs: Math.round(this.paintTimeGoldMs || 0),
               instances: this.instances ? this.instances.length : 0,
               peelProgress: this.peelState ? this.peelState.progress : null,
             });
@@ -864,11 +948,13 @@ class StencilApp {
   }
 
   getNozzleSizeForDevice() {
+    return 15;
     // Use smaller nozzle size on small devices (matching certificate.html media query)
     const isSmall =
       typeof window !== "undefined" &&
       window.matchMedia &&
       window.matchMedia("(max-width: 768px)").matches;
+    console.log(iss);
     return isSmall ? 15 : 25; // Smaller size for mobile devices
   }
 
@@ -919,12 +1005,8 @@ class StencilApp {
     let bitmap = this.assetBitmaps[key];
     if (!bitmap) return;
 
-    // Small-screen crop for certificate to keep visuals synced and better framed.
-    const isSmall =
-      typeof window !== "undefined" &&
-      window.matchMedia &&
-      window.matchMedia("(max-width: 768px)").matches;
-    if (key === "certificate" && isSmall) {
+    // Crop certificate consistently so it matches the stage background framing.
+    if (key === "certificate") {
       bitmap = this.getCroppedBitmap(key, {
         top: 0.0575,
         bottom: 0.0575,
@@ -1489,6 +1571,15 @@ class StencilApp {
       return;
     }
 
+    // Locked/certificate mode: show pointer cursor over the peel hint/hotspot.
+    if (!this.activePointerId && e.pointerType !== "touch" && this.lockedStencilMode) {
+      const { x, y } = this.toStage(e);
+      this.setStageCursor(
+        this.isOverPeelHint(x, y) ? "pointer" : this._canCursor || "default"
+      );
+      return;
+    }
+
     // Hover cursor over handles (mouse/pen only)
     if (!this.activePointerId && e.pointerType !== "touch") {
       const { x, y } = this.toStage(e);
@@ -1586,11 +1677,16 @@ class StencilApp {
       g.translate(inst.x, inst.y);
       g.rotate(inst.rotation);
       g.scale(inst.scale, inst.scale);
-      g.globalAlpha = this.lockedStencilMode
-        ? 0.9
-        : this.selectedIds.has(inst.id)
-        ? 0.9
-        : 0.55;
+      const fade =
+        this.peelState && typeof this.peelState.fadeAlpha === "number"
+          ? this.peelState.fadeAlpha
+          : 1;
+      g.globalAlpha =
+        (this.lockedStencilMode
+          ? 0.9
+          : this.selectedIds.has(inst.id)
+          ? 0.9
+          : 0.55) * fade;
       g.drawImage(inst.bitmap, -inst.bitmap.width / 2, -inst.bitmap.height / 2);
       g.restore();
 
@@ -1631,6 +1727,9 @@ class StencilApp {
         g.restore();
       }
     }
+
+    // Keep the certificate background peel in sync with the stencil peel.
+    this.redrawStageBg();
   }
 
   drawHandle(g, x, y, color, radius = 10) {
@@ -1933,6 +2032,52 @@ class StencilApp {
     return ax * bx + ay * by;
   }
 
+  polyBounds(points) {
+    let minX = Infinity,
+      minY = Infinity,
+      maxX = -Infinity,
+      maxY = -Infinity;
+    for (const p of points) {
+      if (p.x < minX) minX = p.x;
+      if (p.y < minY) minY = p.y;
+      if (p.x > maxX) maxX = p.x;
+      if (p.y > maxY) maxY = p.y;
+    }
+    if (
+      !isFinite(minX) ||
+      !isFinite(minY) ||
+      !isFinite(maxX) ||
+      !isFinite(maxY)
+    )
+      return { x: 0, y: 0, w: 1, h: 1 };
+    return {
+      x: minX,
+      y: minY,
+      w: Math.max(1e-3, maxX - minX),
+      h: Math.max(1e-3, maxY - minY),
+    };
+  }
+
+  drawPeelBackImage(g, poly) {
+    if (!this.peelBackReady || !this.peelBackImage) return false;
+    if (!poly || poly.length < 3) return false;
+    const b = this.polyBounds(poly);
+    g.save();
+    g.beginPath();
+    g.moveTo(poly[0].x, poly[0].y);
+    for (let i = 1; i < poly.length; i++) g.lineTo(poly[i].x, poly[i].y);
+    g.closePath();
+    g.clip();
+    // Ensure it's fully opaque even if the image has alpha.
+    g.fillStyle = "#fff";
+    g.fillRect(b.x, b.y, b.w, b.h);
+    try {
+      g.drawImage(this.peelBackImage, b.x, b.y, b.w, b.h);
+    } catch (_) {}
+    g.restore();
+    return true;
+  }
+
   // Clips a convex polygon against the half-plane defined by dot((P - M), v) <= 0.
   // Returns the clipped polygon and up to 2 intersection points that lie on the boundary line.
   clipConvexPolygonHalfPlane(poly, M, v) {
@@ -1988,6 +2133,269 @@ class StencilApp {
     return { x: p.x - 2 * nUnit.x * dist, y: p.y - 2 * nUnit.y * dist };
   }
 
+  computePeelHintTip(inst, hp) {
+    const anchor = hp.se;
+    const up = this.normalizeVec(hp.ne.x - anchor.x, hp.ne.y - anchor.y);
+    const left = this.normalizeVec(hp.sw.x - anchor.x, hp.sw.y - anchor.y);
+    const t = (this._peelHintAnim && this._peelHintAnim.phase) || 0;
+    const pulse = 1 + 0.14 * Math.sin(t * 2.0);
+    const wobble = 0.012 * Math.sin(t * 3.2);
+    const maxLen = this.computePeelMaxLen(inst);
+    const diag = this.normalizeVec(up.x + left.x, up.y + left.y);
+    const base = 0.05;
+    const hintProgress = this.clamp01(base * pulse + wobble);
+    const tip = {
+      x: anchor.x + diag.x * maxLen * hintProgress,
+      y: anchor.y + diag.y * maxLen * hintProgress,
+    };
+    const strength = this.clamp01(hintProgress / base);
+    return { tip, hintProgress, strength };
+  }
+
+  applyReflectionTransform(g, mid, nUnit) {
+    // Apply reflection transform across the fold line: X' = M + R*(X-M), where R = I - 2nn^T
+    const nx = nUnit.x,
+      ny = nUnit.y;
+    const a = 1 - 2 * nx * nx;
+    const b = -2 * nx * ny;
+    const c = -2 * nx * ny;
+    const d = 1 - 2 * ny * ny;
+    const e = mid.x - (a * mid.x + c * mid.y);
+    const f = mid.y - (b * mid.x + d * mid.y);
+    g.transform(a, b, c, d, e, f);
+  }
+
+  drawPeelFromSource(g, inst, sourceCanvas, tip, strength) {
+    if (!sourceCanvas) return;
+    const hp = this.getHandlePositions(inst);
+    const anchor = hp.se;
+    const vx = tip.x - anchor.x;
+    const vy = tip.y - anchor.y;
+    const vLen = Math.hypot(vx, vy);
+    if (vLen < 1e-3) return;
+
+    const mid = { x: (anchor.x + tip.x) / 2, y: (anchor.y + tip.y) / 2 };
+    const nUnit = { x: vx / vLen, y: vy / vLen };
+    const paper = [hp.nw, hp.ne, hp.se, hp.sw];
+    const clipped = this.clipConvexPolygonHalfPlane(paper, mid, {
+      x: vx,
+      y: vy,
+    });
+    const flapPaper = clipped.poly;
+    if (!flapPaper || flapPaper.length < 3) return;
+
+    // Cut flap region from the front.
+    g.save();
+    g.globalCompositeOperation = "destination-out";
+    g.beginPath();
+    g.moveTo(flapPaper[0].x, flapPaper[0].y);
+    for (let i = 1; i < flapPaper.length; i++)
+      g.lineTo(flapPaper[i].x, flapPaper[i].y);
+    g.closePath();
+    g.fillStyle = "#000";
+    g.fill();
+    g.restore();
+
+    // Fill the exposed area with an opaque "paper underside" so the peel never looks transparent.
+    g.save();
+    const paperGrad = g.createLinearGradient(mid.x, mid.y, tip.x, tip.y);
+    paperGrad.addColorStop(0, "rgb(250,250,250)");
+    paperGrad.addColorStop(1, "rgb(225,225,225)");
+    g.fillStyle = paperGrad;
+    g.beginPath();
+    g.moveTo(flapPaper[0].x, flapPaper[0].y);
+    for (let i = 1; i < flapPaper.length; i++)
+      g.lineTo(flapPaper[i].x, flapPaper[i].y);
+    g.closePath();
+    g.fill();
+    g.restore();
+
+    // Flap polygon in its new position (reflected).
+    const flapBack = flapPaper.map((p) =>
+      this.reflectPointAcrossLine(p, mid, nUnit)
+    );
+
+    // Shadow under flap.
+    g.save();
+    g.fillStyle = `rgba(0,0,0,${0.12 * strength})`;
+    g.shadowColor = `rgba(0,0,0,${0.3 * strength})`;
+    g.shadowBlur = 18 * strength + 2;
+    g.shadowOffsetX = 4 * strength;
+    g.shadowOffsetY = 6 * strength;
+    g.beginPath();
+    g.moveTo(flapBack[0].x, flapBack[0].y);
+    for (let i = 1; i < flapBack.length; i++)
+      g.lineTo(flapBack[i].x, flapBack[i].y);
+    g.closePath();
+    g.fill();
+    g.restore();
+
+    // Flap content: use custom peel-back image if provided, otherwise reflect the source.
+    const drewCustomBack = this.drawPeelBackImage(g, flapBack);
+    if (!drewCustomBack) {
+      g.save();
+      g.beginPath();
+      g.moveTo(flapBack[0].x, flapBack[0].y);
+      for (let i = 1; i < flapBack.length; i++)
+        g.lineTo(flapBack[i].x, flapBack[i].y);
+      g.closePath();
+      g.clip();
+      this.applyReflectionTransform(g, mid, nUnit);
+      g.globalAlpha = 1;
+      g.drawImage(sourceCanvas, 0, 0);
+      g.restore();
+    }
+
+    // Shade the flap without introducing transparency:
+    // use multiply/screen with fully opaque colors inside the flap shape.
+    g.save();
+    g.globalCompositeOperation = "multiply";
+    const dark = g.createLinearGradient(mid.x, mid.y, tip.x, tip.y);
+    const darkC = Math.round(250 - 18 * strength);
+    dark.addColorStop(0, "rgb(255,255,255)");
+    dark.addColorStop(1, `rgb(${darkC},${darkC},${darkC})`);
+    g.fillStyle = dark;
+    g.beginPath();
+    g.moveTo(flapBack[0].x, flapBack[0].y);
+    for (let i = 1; i < flapBack.length; i++)
+      g.lineTo(flapBack[i].x, flapBack[i].y);
+    g.closePath();
+    g.fill();
+    g.restore();
+
+    g.save();
+    g.globalCompositeOperation = "screen";
+    const light = g.createLinearGradient(tip.x, tip.y, mid.x, mid.y);
+    const lightC = Math.round(252 - 10 * strength);
+    light.addColorStop(0, "rgb(255,255,255)");
+    light.addColorStop(1, `rgb(${lightC},${lightC},${lightC})`);
+    g.fillStyle = light;
+    g.beginPath();
+    g.moveTo(flapBack[0].x, flapBack[0].y);
+    for (let i = 1; i < flapBack.length; i++)
+      g.lineTo(flapBack[i].x, flapBack[i].y);
+    g.closePath();
+    g.fill();
+    g.restore();
+
+    // Crease highlight.
+    if (clipped.intersections && clipped.intersections.length >= 2) {
+      const a0 = clipped.intersections[0];
+      const b0 = clipped.intersections[1];
+      g.save();
+      g.strokeStyle = `rgba(255,255,255,${0.28 * strength})`;
+      g.lineWidth = 1.2;
+      g.lineCap = "round";
+      g.beginPath();
+      g.moveTo(a0.x, a0.y);
+      g.lineTo(b0.x, b0.y);
+      g.stroke();
+      g.strokeStyle = `rgba(0,0,0,${0.14 * strength})`;
+      g.lineWidth = 1;
+      g.beginPath();
+      g.moveTo(a0.x, a0.y);
+      g.lineTo(b0.x, b0.y);
+      g.stroke();
+      g.restore();
+    }
+  }
+
+  onStageBgRendered(canvas) {
+    if (!canvas || !(canvas instanceof HTMLCanvasElement)) return;
+    if (!this.stageBgCanvas) this.stageBgCanvas = canvas;
+    if (this.stageBgCanvas !== canvas) this.stageBgCanvas = canvas;
+    this.stageBgCtx = this.stageBgCanvas.getContext("2d");
+    const stageW = Math.max(1, Math.round(this.stageBgCanvas.width / this.dpr));
+    const stageH = Math.max(
+      1,
+      Math.round(this.stageBgCanvas.height / this.dpr)
+    );
+    // Copy the freshly rendered background as the "clean base" (in stage CSS px units).
+    const base = document.createElement("canvas");
+    base.width = stageW;
+    base.height = stageH;
+    const bg = base.getContext("2d");
+    bg.clearRect(0, 0, stageW, stageH);
+    try {
+      bg.drawImage(
+        this.stageBgCanvas,
+        0,
+        0,
+        this.stageBgCanvas.width,
+        this.stageBgCanvas.height,
+        0,
+        0,
+        stageW,
+        stageH
+      );
+    } catch (_) {}
+    this._stageBgBase = base;
+    this.redrawStageBg();
+  }
+
+  redrawStageBg() {
+    if (!this.stageBgCanvas || !this.stageBgCtx) return;
+    if (!this._stageBgBase) return;
+
+    const stageW = this.stageBgCanvas.width / this.dpr;
+    const stageH = this.stageBgCanvas.height / this.dpr;
+    const g = this.stageBgCtx;
+    g.setTransform(this.dpr, 0, 0, this.dpr, 0, 0);
+    g.clearRect(0, 0, stageW, stageH);
+
+    // When fully peeled, hide the stage background completely.
+    if (this.stencilRemoved) return;
+
+    // Draw base certificate background first.
+    const fade =
+      this.peelState && typeof this.peelState.fadeAlpha === "number"
+        ? this.peelState.fadeAlpha
+        : 1;
+    g.save();
+    g.globalAlpha = fade;
+    g.drawImage(this._stageBgBase, 0, 0, stageW, stageH);
+    g.restore();
+
+    const inst = this.getPeelTargetInstance();
+    if (!inst) return;
+
+    // Apply full peel if active.
+    if (
+      this.peelState &&
+      !this.peelState.removed &&
+      this.peelState.instId === inst.id &&
+      this.peelState.progress > 0
+    ) {
+      const tip = this.peelState.tip || this.getPeelAnchor(inst);
+      g.save();
+      g.globalAlpha = fade;
+      this.drawPeelFromSource(
+        g,
+        inst,
+        this._stageBgBase,
+        tip,
+        this.clamp01(this.peelState.progress)
+      );
+      g.restore();
+      return;
+    }
+
+    // Otherwise, show hint peel on the background too (same geometry as stencil hint).
+    if (
+      this.peelHintUnlocked &&
+      this.peelState &&
+      !this.peelState.dragging &&
+      (this.peelState.progress || 0) <= 0
+    ) {
+      const hp = this.getHandlePositions(inst);
+      const { tip, strength } = this.computePeelHintTip(inst, hp);
+      g.save();
+      g.globalAlpha = fade;
+      this.drawPeelFromSource(g, inst, this._stageBgBase, tip, strength);
+      g.restore();
+    }
+  }
+
   getPeelTargetInstance() {
     if (!this.lockedStencilMode || this.stencilRemoved) return null;
     if (!this.instances || this.instances.length === 0) return null;
@@ -2021,7 +2429,10 @@ class StencilApp {
       return false;
 
     const anchor = this.getPeelAnchor(inst);
-    const r = this.getPeelHandleRadius(inst);
+    // Use an expanded hit area when the hint is visible so clicks near the hint still start peel.
+    const r =
+      this.getPeelHandleRadius(inst) *
+      (this.peelHintUnlocked ? 1.65 : 1.25);
     if (Math.hypot(x - anchor.x, y - anchor.y) > r) return false;
 
     const maxLen = this.computePeelMaxLen(inst);
@@ -2034,6 +2445,8 @@ class StencilApp {
     this.peelState.progress = 0.001;
     this.peelState.dragging = true;
     this.peelState.removed = false;
+    this.peelState.fadeAlpha = 1;
+    this.peelState.autoTriggered = false;
     this.peelState.animToken++;
     this.redrawGuides();
     return true;
@@ -2080,6 +2493,42 @@ class StencilApp {
     ps.tip = { x: anchor.x + dir.x * clamped, y: anchor.y + dir.y * clamped };
     ps.progress = this.clamp01(clamped / maxLen);
     this.redrawGuides();
+
+    // Auto-peel: once the user drags a bit, complete automatically and fade out.
+    if (
+      this.autoPeelEnabled &&
+      !ps.autoTriggered &&
+      ps.progress >= this.autoPeelTriggerProgress
+    ) {
+      ps.autoTriggered = true;
+      ps.dragging = false;
+      ps.pointerId = null;
+      this.animatePeelTo(1, {
+        removeOnComplete: false,
+        fadeOutOnComplete: true,
+      });
+    }
+  }
+
+  // Hover/press hotspot for the peel hint (bottom-right corner).
+  isOverPeelHint(x, y) {
+    if (!this.lockedStencilMode || this.stencilRemoved) return false;
+    if (!this.peelHintUnlocked) return false;
+    if (!this.peelState || this.peelState.dragging || this.peelState.progress > 0)
+      return false;
+    const inst = this.getPeelTargetInstance();
+    if (!inst) return false;
+    const anchor = this.getPeelAnchor(inst);
+    // Expand touch zone for ease of starting peel.
+    const r = this.getPeelHandleRadius(inst) * 1.65;
+    const inset = r * 0.6;
+    const inCircle = Math.hypot(x - anchor.x, y - anchor.y) <= r;
+    const inRect =
+      x >= anchor.x - inset &&
+      x <= anchor.x + inset * 1.4 &&
+      y >= anchor.y - inset * 0.8 &&
+      y <= anchor.y + inset * 1.4;
+    return inCircle || inRect;
   }
 
   releasePeel(forceComplete = false) {
@@ -2094,7 +2543,10 @@ class StencilApp {
     });
   }
 
-  animatePeelTo(targetProgress, { removeOnComplete = false } = {}) {
+  animatePeelTo(
+    targetProgress,
+    { removeOnComplete = false, fadeOutOnComplete = false } = {}
+  ) {
     const ps = this.peelState;
     if (!ps) return;
     const inst = this.instances.find((i) => i.id === ps.instId) || null;
@@ -2133,12 +2585,44 @@ class StencilApp {
       ps.progress = targetProgress;
       ps.tip = targetTip;
       this.redrawGuides();
-      if (removeOnComplete && targetProgress >= 0.999) {
-        this.finishPeelRemoval();
-      } else if (targetProgress <= 0.001) {
+      if (targetProgress <= 0.001) {
         ps.progress = 0;
         ps.tip = { x: anchor.x, y: anchor.y };
+        ps.fadeAlpha = 1;
+        ps.autoTriggered = false;
+        return;
       }
+
+      if (fadeOutOnComplete && targetProgress >= 0.999) {
+        this.startPeelFadeOut();
+        return;
+      }
+      if (removeOnComplete && targetProgress >= 0.999) {
+        this.finishPeelRemoval();
+        return;
+      }
+    };
+    requestAnimationFrame(step);
+  }
+
+  startPeelFadeOut() {
+    const ps = this.peelState;
+    if (!ps) return;
+    const token = ++ps.animToken;
+    const start = performance.now();
+    const dur = this.autoPeelFadeDurationMs || 420;
+    const easeIn = (t) => t * t;
+    const step = (now) => {
+      if (!this.peelState || this.peelState.animToken !== token) return;
+      const t = this.clamp01((now - start) / dur);
+      ps.fadeAlpha = 1 - easeIn(t);
+      this.redrawGuides();
+      if (t < 1) {
+        requestAnimationFrame(step);
+        return;
+      }
+      ps.fadeAlpha = 0;
+      this.finishPeelRemoval();
     };
     requestAnimationFrame(step);
   }
@@ -2156,6 +2640,7 @@ class StencilApp {
     this.instances = [];
     this.selectedIds.clear();
     this.clipToStencil = false;
+    this.redrawStageBg(); // also hide stage background
     this.redrawGuides();
   }
 
@@ -2171,22 +2656,9 @@ class StencilApp {
 
     const hp = this.getHandlePositions(inst);
     const anchor = hp.se;
-    const up = this.normalizeVec(hp.ne.x - anchor.x, hp.ne.y - anchor.y);
-    const left = this.normalizeVec(hp.sw.x - anchor.x, hp.sw.y - anchor.y);
-
     // Build the hint *from the stencil itself*: lift a small corner flap (reflection across fold line)
     // and cut it out of the front stencil overlay so the hint isn't a separate drawn triangle.
-    const t = (this._peelHintAnim && this._peelHintAnim.phase) || 0;
-    const pulse = 1 + 0.14 * Math.sin(t * 2.0);
-    const wobble = 0.012 * Math.sin(t * 3.2);
-    const maxLen = this.computePeelMaxLen(inst);
-    const diag = this.normalizeVec(up.x + left.x, up.y + left.y);
-    // Make the hint clearly visible (size and shading).
-    const hintProgress = this.clamp01(0.05 * pulse + wobble);
-    const tip = {
-      x: anchor.x + diag.x * maxLen * hintProgress,
-      y: anchor.y + diag.y * maxLen * hintProgress,
-    };
+    const { tip, hintProgress, strength } = this.computePeelHintTip(inst, hp);
 
     const vx = tip.x - anchor.x;
     const vy = tip.y - anchor.y;
@@ -2203,7 +2675,6 @@ class StencilApp {
     });
     const flapPaper = clipped.poly;
     if (!flapPaper || flapPaper.length < 3) return;
-    const strength = this.clamp01(hintProgress / 0.08);
 
     if (typeof window !== "undefined" && window.DEBUG_PEEL) {
       const now = performance.now();
@@ -2282,7 +2753,7 @@ class StencilApp {
     g.translate(inst.x, inst.y);
     g.rotate(inst.rotation);
     g.scale(inst.scale, inst.scale);
-    g.globalAlpha = 0.95;
+    g.globalAlpha = 1;
     g.drawImage(inst.bitmap, -inst.bitmap.width / 2, -inst.bitmap.height / 2);
     g.restore();
     g.restore();
@@ -2358,19 +2829,63 @@ class StencilApp {
       this.reflectPointAcrossLine(p, mid, nUnit)
     );
 
-    g.save();
-    const grad = g.createLinearGradient(mid.x, mid.y, tip.x, tip.y);
-    grad.addColorStop(0, `rgba(255,255,255,${0.62 * peel.progress})`);
-    grad.addColorStop(0.6, `rgba(235,235,235,${0.16 + 0.18 * peel.progress})`);
-    grad.addColorStop(1, `rgba(0,0,0,${0.14 * peel.progress})`);
-    g.fillStyle = grad;
-    g.beginPath();
-    g.moveTo(flapBack[0].x, flapBack[0].y);
-    for (let i = 1; i < flapBack.length; i++)
-      g.lineTo(flapBack[i].x, flapBack[i].y);
-    g.closePath();
-    g.fill();
-    g.restore();
+    const drewCustomBack = this.drawPeelBackImage(g, flapBack);
+    if (drewCustomBack) {
+      const strength = this.clamp01(peel.progress);
+      const stageW = this.guideCanvas.width / this.dpr;
+      const stageH = this.guideCanvas.height / this.dpr;
+      g.save();
+      g.beginPath();
+      g.moveTo(flapBack[0].x, flapBack[0].y);
+      for (let i = 1; i < flapBack.length; i++)
+        g.lineTo(flapBack[i].x, flapBack[i].y);
+      g.closePath();
+      g.clip();
+      g.globalCompositeOperation = "multiply";
+      const dark = g.createLinearGradient(mid.x, mid.y, tip.x, tip.y);
+      const darkC = Math.round(250 - 22 * strength);
+      dark.addColorStop(0, "rgb(255,255,255)");
+      dark.addColorStop(1, `rgb(${darkC},${darkC},${darkC})`);
+      g.fillStyle = dark;
+      g.fillRect(0, 0, stageW, stageH);
+      g.restore();
+
+      g.save();
+      g.beginPath();
+      g.moveTo(flapBack[0].x, flapBack[0].y);
+      for (let i = 1; i < flapBack.length; i++)
+        g.lineTo(flapBack[i].x, flapBack[i].y);
+      g.closePath();
+      g.clip();
+      g.globalCompositeOperation = "screen";
+      const light = g.createLinearGradient(tip.x, tip.y, mid.x, mid.y);
+      const lightC = Math.round(252 - 12 * strength);
+      light.addColorStop(0, "rgb(255,255,255)");
+      light.addColorStop(1, `rgb(${lightC},${lightC},${lightC})`);
+      g.fillStyle = light;
+      g.fillRect(0, 0, stageW, stageH);
+      g.restore();
+    } else {
+      g.save();
+      const grad = g.createLinearGradient(mid.x, mid.y, tip.x, tip.y);
+      // Keep the peeled flap fully opaque (no see-through).
+      // Use color (not alpha) to suggest shading.
+      const shade = this.clamp01(peel.progress);
+      const c0 = Math.round(250 - 8 * shade);
+      const c1 = Math.round(236 - 26 * shade);
+      const c2 = Math.round(210 - 36 * shade);
+      grad.addColorStop(0, `rgb(${c0},${c0},${c0})`);
+      grad.addColorStop(0.6, `rgb(${c1},${c1},${c1})`);
+      grad.addColorStop(1, `rgb(${c2},${c2},${c2})`);
+      g.fillStyle = grad;
+      g.beginPath();
+      g.moveTo(flapBack[0].x, flapBack[0].y);
+      for (let i = 1; i < flapBack.length; i++)
+        g.lineTo(flapBack[i].x, flapBack[i].y);
+      g.closePath();
+      g.fill();
+      g.restore();
+    }
 
     // 3) Draw a subtle crease along the fold line segment on the paper.
     if (clipped.intersections && clipped.intersections.length >= 2) {
