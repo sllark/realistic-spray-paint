@@ -22,6 +22,31 @@ class StencilApp {
     this._compositeLoopRunning = false;
     this.trayDrag = null; // { asset, previewEl }
     this.rotateIcon = new Image();
+    this.peelState = {
+      instId: null,
+      pointerId: null,
+      anchor: null,
+      tip: null,
+      vector: null,
+      maxLen: 0,
+      progress: 0,
+      dragging: false,
+      removed: false,
+      animToken: 0,
+    };
+    this.stencilRemoved = false;
+    this.paintTimeMs = 0;
+    this.peelHintUnlocked = false;
+    this._strokeStartTs = 0;
+    this._paintTimerLastTs = 0;
+    this._peelDebugLastLogTs = 0;
+    this._peelHintAnim = {
+      running: false,
+      lastTs: 0,
+      lastDrawTs: 0,
+      phase: 0,
+    };
+    this._peelHintWasVisible = false;
     // Default cursor reflecting selected can
     this._canCursor = null;
     this._makeCursorFromImage = (
@@ -79,7 +104,7 @@ class StencilApp {
     // Create spray tool (will be rebuilt on first resize to sync buffers)
     this.spray = new SprayPaint(this.strokeCanvas, this.strokeCtx);
     this.spray.setColor("#221F20");
-    this.spray.setNozzleSize(25);
+    this.spray.setNozzleSize(this.getNozzleSizeForDevice());
     this.spray.startDripLoop();
     this.spray.getDripCompositeMode = () => "source-over";
 
@@ -431,6 +456,8 @@ class StencilApp {
 
     // Begin background composite loop for drips
     this.startCompositeLoop();
+    // Subtle animated hint for the peel corner in locked/certificate mode
+    this.startPeelHintLoop();
   }
 
   // Export canvas to PNG - uses Web Share API on iOS for direct Photos save
@@ -528,6 +555,27 @@ class StencilApp {
       this.paintCtx.restore();
     }
 
+    // In fixed-stencil mode, "reset" should bring the stencil back even if it was peeled away.
+    if (keepStencils && this.fixedStencilKey) {
+      this.stencilRemoved = false;
+      this.paintTimeMs = 0;
+      this.peelHintUnlocked = false;
+      this._strokeStartTs = 0;
+      this._paintTimerLastTs = 0;
+      if (this.peelState) {
+        this.peelState.instId = null;
+        this.peelState.pointerId = null;
+        this.peelState.anchor = null;
+        this.peelState.tip = null;
+        this.peelState.vector = null;
+        this.peelState.maxLen = 0;
+        this.peelState.progress = 0;
+        this.peelState.dragging = false;
+        this.peelState.removed = false;
+        this.peelState.animToken = 0;
+      }
+    }
+
     if (!keepStencils) {
       // Remove all placed stencil instances and selection
       this.instances = [];
@@ -601,6 +649,32 @@ class StencilApp {
     this._compositeLoopRunning = true;
     const tick = () => {
       try {
+        // Track cumulative paint time across all strokes (including a single long stroke).
+        const now = performance.now();
+        const prev = this._paintTimerLastTs || now;
+        const dt = Math.max(0, now - prev);
+        this._paintTimerLastTs = now;
+        const shouldTrackPaintTime =
+          !this.peelHintUnlocked &&
+          this.lockedStencilMode &&
+          this.fixedStencilKey &&
+          !this.stencilRemoved &&
+          this.spray &&
+          this.spray.isDrawing;
+        if (shouldTrackPaintTime) {
+          this.paintTimeMs += dt;
+          if (this.paintTimeMs >= 5000) {
+            this.peelHintUnlocked = true;
+            if (typeof window !== "undefined" && window.DEBUG_PEEL) {
+              console.log(
+                "[peel] hint unlocked",
+                Math.round(this.paintTimeMs),
+                "ms"
+              );
+            }
+          }
+        }
+
         const hasDrips =
           this.spray &&
           Array.isArray(this.spray.drips) &&
@@ -626,6 +700,76 @@ class StencilApp {
       } catch (e) {
         // ignore
       }
+      requestAnimationFrame(tick);
+    };
+    requestAnimationFrame(tick);
+  }
+
+  startPeelHintLoop() {
+    if (!this._peelHintAnim || this._peelHintAnim.running) return;
+    this._peelHintAnim.running = true;
+    const tick = (ts) => {
+      try {
+        const canHint =
+          this.peelHintUnlocked &&
+          this.lockedStencilMode &&
+          !this.stencilRemoved &&
+          this.fixedStencilKey &&
+          this.instances &&
+          this.instances.length > 0 &&
+          this.peelState &&
+          !this.peelState.dragging &&
+          (this.peelState.progress || 0) <= 0;
+
+        if (canHint) {
+          if (
+            typeof window !== "undefined" &&
+            window.DEBUG_PEEL &&
+            !this._peelHintWasVisible
+          ) {
+            console.log("[peel] hint loop active", {
+              paintTimeMs: Math.round(this.paintTimeMs || 0),
+              instances: this.instances ? this.instances.length : 0,
+              peelProgress: this.peelState ? this.peelState.progress : null,
+            });
+          }
+          this._peelHintWasVisible = true;
+          const prev = this._peelHintAnim.lastTs || ts;
+          const dt = Math.max(0, ts - prev);
+          this._peelHintAnim.phase += dt / 1000;
+          this._peelHintAnim.lastTs = ts;
+
+          // Throttle redraws to ~30fps (use a dedicated timestamp so dt doesn't get reset each frame).
+          const lastDraw = this._peelHintAnim.lastDrawTs || 0;
+          if (!lastDraw || ts - lastDraw >= 33) {
+            this._peelHintAnim.lastDrawTs = ts;
+            this.redrawGuides();
+          }
+        } else {
+          this._peelHintAnim.lastTs = ts;
+          this._peelHintAnim.lastDrawTs = ts;
+          this._peelHintWasVisible = false;
+          // Optional debug: explain why hint isn't visible after unlock.
+          if (
+            typeof window !== "undefined" &&
+            window.DEBUG_PEEL &&
+            this.peelHintUnlocked
+          ) {
+            const now = performance.now();
+            if (now - (this._peelDebugLastLogTs || 0) > 1500) {
+              this._peelDebugLastLogTs = now;
+              console.log("[peel] hint suppressed", {
+                lockedStencilMode: this.lockedStencilMode,
+                stencilRemoved: this.stencilRemoved,
+                fixedStencilKey: this.fixedStencilKey,
+                instances: this.instances ? this.instances.length : 0,
+                peelDragging: this.peelState ? this.peelState.dragging : null,
+                peelProgress: this.peelState ? this.peelState.progress : null,
+              });
+            }
+          }
+        }
+      } catch (_) {}
       requestAnimationFrame(tick);
     };
     requestAnimationFrame(tick);
@@ -719,6 +863,15 @@ class StencilApp {
     );
   }
 
+  getNozzleSizeForDevice() {
+    // Use smaller nozzle size on small devices (matching certificate.html media query)
+    const isSmall =
+      typeof window !== "undefined" &&
+      window.matchMedia &&
+      window.matchMedia("(max-width: 768px)").matches;
+    return isSmall ? 15 : 25; // Smaller size for mobile devices
+  }
+
   resize() {
     const rect = this.paintCanvas.parentElement.getBoundingClientRect();
     // In fixed/locked stencil mode (e.g. certificate page) the stage can be small on mobile.
@@ -750,11 +903,17 @@ class StencilApp {
     });
     // Reset spray tool so its internal buffers match new canvas size
     this.rebuildSpray();
-    if (this.fixedStencilKey) this.buildOrUpdateFixedStencil();
+    // Update nozzle size based on current device size
+    if (this.spray) {
+      this.spray.setNozzleSize(this.getNozzleSizeForDevice());
+    }
+    if (this.fixedStencilKey && !this.stencilRemoved)
+      this.buildOrUpdateFixedStencil();
     this.redrawGuides();
   }
 
   buildOrUpdateFixedStencil() {
+    if (this.stencilRemoved) return;
     const key = this.fixedStencilKey;
     if (!key) return;
     let bitmap = this.assetBitmaps[key];
@@ -1135,6 +1294,16 @@ class StencilApp {
 
     // Locked (fixed-stencil) mode: always paint; no selecting/moving/resizing.
     if (this.lockedStencilMode) {
+      // Allow peeling the fixed stencil from the bottom-right corner instead of painting.
+      if (this.tryStartPeel(x, y, e.pointerId)) return;
+      // If a peel is mid-animation, ignore paint input until it settles.
+      if (
+        this.peelState &&
+        !this.peelState.removed &&
+        this.peelState.progress > 0
+      )
+        return;
+
       // Before we begin a new stroke: if there are pending drips on the stroke layer,
       // bake them to the paint layer so clearing doesn't truncate them.
       if (this.spray && this.spray._strokeDirty) {
@@ -1149,6 +1318,9 @@ class StencilApp {
           this.spray._strokeDirty = false;
         } catch (_) {}
       }
+      // Start paint-time tracking for peel-hint unlock (cumulative across strokes).
+      this._strokeStartTs = performance.now();
+      this._paintTimerLastTs = this._strokeStartTs;
       this.spray.startDrawing(x, y, 1.0);
       return;
     }
@@ -1224,6 +1396,17 @@ class StencilApp {
     const pt = this.toStage(e);
     if (this.activePointers.has(e.pointerId))
       this.activePointers.set(e.pointerId, pt);
+
+    // Peeling takes precedence over all other interactions (including spraying).
+    if (
+      this.peelState &&
+      this.peelState.dragging &&
+      e.pointerId === this.peelState.pointerId
+    ) {
+      e.preventDefault();
+      this.updatePeelDrag(pt.x, pt.y);
+      return;
+    }
 
     // Two-finger pinch (scale/rotate) when two pointers are active on a selected instance
     if (
@@ -1325,6 +1508,14 @@ class StencilApp {
   }
 
   onPointerUp(e) {
+    if (
+      this.peelState &&
+      this.peelState.dragging &&
+      e.pointerId === this.peelState.pointerId
+    ) {
+      e.preventDefault();
+      this.releasePeel();
+    }
     if (e.pointerId === this.activePointerId) {
       this.activePointerId = null;
       this.draggingInstanceId = null;
@@ -1349,6 +1540,7 @@ class StencilApp {
         this.strokeCanvas.height
       );
       if (this.spray) this.spray._strokeDirty = false;
+      this._strokeStartTs = 0;
     }
   }
 
@@ -1401,6 +1593,18 @@ class StencilApp {
         : 0.55;
       g.drawImage(inst.bitmap, -inst.bitmap.width / 2, -inst.bitmap.height / 2);
       g.restore();
+
+      const peelActive =
+        this.peelState &&
+        !this.peelState.removed &&
+        this.peelState.instId === inst.id &&
+        this.peelState.progress > 0;
+      if (peelActive) {
+        this.drawPeelEffect(g, inst, this.peelState);
+      } else if (this.lockedStencilMode && !this.stencilRemoved) {
+        // Hint where to start peeling (bottom-right corner) in fixed-stencil mode.
+        this.drawPeelHint(g, inst);
+      }
 
       // bbox
       if (this.selectedIds.has(inst.id)) {
@@ -1714,6 +1918,474 @@ class StencilApp {
     }
     if (within(x, y, rotPos.x, rotPos.y)) return "rotate";
     return null;
+  }
+
+  clamp01(n) {
+    return Math.max(0, Math.min(1, n));
+  }
+
+  normalizeVec(x, y) {
+    const len = Math.max(1e-6, Math.hypot(x, y));
+    return { x: x / len, y: y / len };
+  }
+
+  dot(ax, ay, bx, by) {
+    return ax * bx + ay * by;
+  }
+
+  // Clips a convex polygon against the half-plane defined by dot((P - M), v) <= 0.
+  // Returns the clipped polygon and up to 2 intersection points that lie on the boundary line.
+  clipConvexPolygonHalfPlane(poly, M, v) {
+    const out = [];
+    const intersections = [];
+    const vx = v.x,
+      vy = v.y;
+    const inside = (p) => this.dot(p.x - M.x, p.y - M.y, vx, vy) <= 0;
+    const intersect = (s, e) => {
+      const sx = s.x,
+        sy = s.y,
+        ex = e.x,
+        ey = e.y;
+      const dx = ex - sx,
+        dy = ey - sy;
+      const denom = this.dot(dx, dy, vx, vy);
+      if (Math.abs(denom) < 1e-8) return null;
+      const t = this.dot(M.x - sx, M.y - sy, vx, vy) / denom;
+      const tt = Math.max(0, Math.min(1, t));
+      return { x: sx + dx * tt, y: sy + dy * tt };
+    };
+
+    for (let i = 0; i < poly.length; i++) {
+      const s = poly[i];
+      const e = poly[(i + 1) % poly.length];
+      const sIn = inside(s);
+      const eIn = inside(e);
+      if (sIn && eIn) {
+        out.push(e);
+      } else if (sIn && !eIn) {
+        const p = intersect(s, e);
+        if (p) {
+          out.push(p);
+          intersections.push(p);
+        }
+      } else if (!sIn && eIn) {
+        const p = intersect(s, e);
+        if (p) {
+          out.push(p);
+          intersections.push(p);
+        }
+        out.push(e);
+      }
+    }
+    return { poly: out, intersections };
+  }
+
+  reflectPointAcrossLine(p, M, nUnit) {
+    // Line is defined by (X - M)·n = 0 where n is a unit normal.
+    const dx = p.x - M.x;
+    const dy = p.y - M.y;
+    const dist = this.dot(dx, dy, nUnit.x, nUnit.y);
+    return { x: p.x - 2 * nUnit.x * dist, y: p.y - 2 * nUnit.y * dist };
+  }
+
+  getPeelTargetInstance() {
+    if (!this.lockedStencilMode || this.stencilRemoved) return null;
+    if (!this.instances || this.instances.length === 0) return null;
+    // Certificate page uses a single fixed stencil instance.
+    if (this.fixedStencilKey) return this.instances[0];
+    return null;
+  }
+
+  getPeelAnchor(inst) {
+    const hp = this.getHandlePositions(inst);
+    return hp.se;
+  }
+
+  getPeelHandleRadius(inst) {
+    const size =
+      Math.min(inst.bitmap.width, inst.bitmap.height) *
+      Math.max(0.5, inst.scale);
+    return Math.max(26, Math.min(90, size * 0.18));
+  }
+
+  computePeelMaxLen() {
+    const stageW = this.guideCanvas.width / this.dpr;
+    return Math.max(1, stageW * 2.5);
+  }
+
+  tryStartPeel(x, y, pointerId) {
+    const inst = this.getPeelTargetInstance();
+    if (!inst) return false;
+
+    if (this.peelState && (this.peelState.dragging || this.peelState.removed))
+      return false;
+
+    const anchor = this.getPeelAnchor(inst);
+    const r = this.getPeelHandleRadius(inst);
+    if (Math.hypot(x - anchor.x, y - anchor.y) > r) return false;
+
+    const maxLen = this.computePeelMaxLen(inst);
+    this.peelState.instId = inst.id;
+    this.peelState.pointerId = pointerId;
+    this.peelState.anchor = anchor;
+    this.peelState.vector = { x: -Math.SQRT1_2, y: -Math.SQRT1_2 };
+    this.peelState.maxLen = maxLen;
+    this.peelState.tip = { x: anchor.x, y: anchor.y };
+    this.peelState.progress = 0.001;
+    this.peelState.dragging = true;
+    this.peelState.removed = false;
+    this.peelState.animToken++;
+    this.redrawGuides();
+    return true;
+  }
+
+  updatePeelDrag(x, y) {
+    const ps = this.peelState;
+    if (!ps || !ps.dragging) return;
+    const inst = this.instances.find((i) => i.id === ps.instId);
+    if (!inst) return;
+
+    const hp = this.getHandlePositions(inst);
+    const anchor = hp.se;
+    const up = this.normalizeVec(hp.ne.x - anchor.x, hp.ne.y - anchor.y);
+    const left = this.normalizeVec(hp.sw.x - anchor.x, hp.sw.y - anchor.y);
+    const maxLen = ps.maxLen || this.computePeelMaxLen(inst);
+    const dx = x - anchor.x;
+    const dy = y - anchor.y;
+    const dist = Math.hypot(dx, dy);
+    const clamped = Math.min(maxLen, dist);
+    let dir =
+      dist > 1e-3
+        ? { x: dx / dist, y: dy / dist }
+        : ps.vector || { x: -Math.SQRT1_2, y: -Math.SQRT1_2 };
+    // Constrain drag direction to the inside of the stencil (towards its center),
+    // so the corner doesn't peel "outwards" off-canvas.
+    if (dist > 1e-3) {
+      const dUp = Math.max(0, dir.x * up.x + dir.y * up.y);
+      const dLeft = Math.max(0, dir.x * left.x + dir.y * left.y);
+      const cx = up.x * dUp + left.x * dLeft;
+      const cy = up.y * dUp + left.y * dLeft;
+      const clen = Math.hypot(cx, cy);
+      if (clen > 1e-3) {
+        dir = { x: cx / clen, y: cy / clen };
+      } else {
+        const diag = this.normalizeVec(up.x + left.x, up.y + left.y);
+        dir = diag;
+      }
+    }
+
+    ps.anchor = anchor;
+    ps.maxLen = maxLen;
+    ps.vector = dir;
+    ps.tip = { x: anchor.x + dir.x * clamped, y: anchor.y + dir.y * clamped };
+    ps.progress = this.clamp01(clamped / maxLen);
+    this.redrawGuides();
+  }
+
+  releasePeel(forceComplete = false) {
+    const ps = this.peelState;
+    if (!ps || !ps.dragging) return;
+    ps.dragging = false;
+    ps.pointerId = null;
+
+    const shouldRemove = forceComplete || ps.progress >= 0.8;
+    this.animatePeelTo(shouldRemove ? 1 : 0, {
+      removeOnComplete: shouldRemove,
+    });
+  }
+
+  animatePeelTo(targetProgress, { removeOnComplete = false } = {}) {
+    const ps = this.peelState;
+    if (!ps) return;
+    const inst = this.instances.find((i) => i.id === ps.instId) || null;
+    const anchor = inst ? this.getPeelAnchor(inst) : ps.anchor;
+    if (!anchor) return;
+
+    const startProgress = ps.progress || 0;
+    const startTip = ps.tip || { x: anchor.x, y: anchor.y };
+    const dir = ps.vector || { x: -Math.SQRT1_2, y: -Math.SQRT1_2 };
+    const maxLen = ps.maxLen || (inst ? this.computePeelMaxLen(inst) : 200);
+    const targetTip =
+      targetProgress <= 0
+        ? { x: anchor.x, y: anchor.y }
+        : { x: anchor.x + dir.x * maxLen, y: anchor.y + dir.y * maxLen };
+
+    const token = ++ps.animToken;
+    const startTime = performance.now();
+    const duration = 280;
+    const easeOutCubic = (t) => 1 - Math.pow(1 - t, 3);
+
+    const step = (now) => {
+      if (!this.peelState || this.peelState.animToken !== token) return;
+      const t = this.clamp01((now - startTime) / duration);
+      const e = easeOutCubic(t);
+      ps.progress = startProgress + (targetProgress - startProgress) * e;
+      ps.tip = {
+        x: startTip.x + (targetTip.x - startTip.x) * e,
+        y: startTip.y + (targetTip.y - startTip.y) * e,
+      };
+      this.redrawGuides();
+      if (t < 1) {
+        requestAnimationFrame(step);
+        return;
+      }
+
+      ps.progress = targetProgress;
+      ps.tip = targetTip;
+      this.redrawGuides();
+      if (removeOnComplete && targetProgress >= 0.999) {
+        this.finishPeelRemoval();
+      } else if (targetProgress <= 0.001) {
+        ps.progress = 0;
+        ps.tip = { x: anchor.x, y: anchor.y };
+      }
+    };
+    requestAnimationFrame(step);
+  }
+
+  finishPeelRemoval() {
+    if (this.stencilRemoved) return;
+    this.stencilRemoved = true;
+    if (this.peelState) {
+      this.peelState.removed = true;
+      this.peelState.dragging = false;
+      this.peelState.pointerId = null;
+      this.peelState.progress = 1;
+    }
+    // Remove stencil instance so the guide overlay disappears and masking stops.
+    this.instances = [];
+    this.selectedIds.clear();
+    this.clipToStencil = false;
+    this.redrawGuides();
+  }
+
+  drawPeelHint(g, inst) {
+    // Only show when peel is idle and stencil is present.
+    if (!this.lockedStencilMode || this.stencilRemoved) return;
+    if (!this.peelHintUnlocked) return;
+    if (
+      this.peelState &&
+      (this.peelState.dragging || this.peelState.progress > 0)
+    )
+      return;
+
+    const hp = this.getHandlePositions(inst);
+    const anchor = hp.se;
+    const up = this.normalizeVec(hp.ne.x - anchor.x, hp.ne.y - anchor.y);
+    const left = this.normalizeVec(hp.sw.x - anchor.x, hp.sw.y - anchor.y);
+
+    // Build the hint *from the stencil itself*: lift a small corner flap (reflection across fold line)
+    // and cut it out of the front stencil overlay so the hint isn't a separate drawn triangle.
+    const t = (this._peelHintAnim && this._peelHintAnim.phase) || 0;
+    const pulse = 1 + 0.14 * Math.sin(t * 2.0);
+    const wobble = 0.012 * Math.sin(t * 3.2);
+    const maxLen = this.computePeelMaxLen(inst);
+    const diag = this.normalizeVec(up.x + left.x, up.y + left.y);
+    // Make the hint clearly visible (size and shading).
+    const hintProgress = this.clamp01(0.05 * pulse + wobble);
+    const tip = {
+      x: anchor.x + diag.x * maxLen * hintProgress,
+      y: anchor.y + diag.y * maxLen * hintProgress,
+    };
+
+    const vx = tip.x - anchor.x;
+    const vy = tip.y - anchor.y;
+    const vLen = Math.hypot(vx, vy);
+    if (vLen < 1e-3) return;
+
+    // Fold line is the perpendicular bisector of anchor->tip.
+    const mid = { x: (anchor.x + tip.x) / 2, y: (anchor.y + tip.y) / 2 };
+    const nUnit = { x: vx / vLen, y: vy / vLen };
+    const paper = [hp.nw, hp.ne, hp.se, hp.sw];
+    const clipped = this.clipConvexPolygonHalfPlane(paper, mid, {
+      x: vx,
+      y: vy,
+    });
+    const flapPaper = clipped.poly;
+    if (!flapPaper || flapPaper.length < 3) return;
+    const strength = this.clamp01(hintProgress / 0.08);
+
+    if (typeof window !== "undefined" && window.DEBUG_PEEL) {
+      const now = performance.now();
+      if (now - (this._peelDebugLastLogTs || 0) > 1000) {
+        this._peelDebugLastLogTs = now;
+        let area2 = 0;
+        for (let i = 0; i < flapPaper.length; i++) {
+          const p = flapPaper[i];
+          const q = flapPaper[(i + 1) % flapPaper.length];
+          area2 += p.x * q.y - q.x * p.y;
+        }
+        const area = Math.abs(area2) / 2;
+        console.log("[peel] drawPeelHint", {
+          hintProgress: +hintProgress.toFixed(3),
+          tipDist: Math.round(vLen),
+          flapPts: flapPaper.length,
+          flapArea: Math.round(area),
+          strength: +strength.toFixed(2),
+        });
+      }
+    }
+
+    // 1) Remove the flap area from the front overlay.
+    g.save();
+    g.globalCompositeOperation = "destination-out";
+    g.beginPath();
+    g.moveTo(flapPaper[0].x, flapPaper[0].y);
+    for (let i = 1; i < flapPaper.length; i++)
+      g.lineTo(flapPaper[i].x, flapPaper[i].y);
+    g.closePath();
+    g.fillStyle = "#000";
+    g.fill();
+    g.restore();
+
+    // 2) Draw the lifted flap by reflecting the stencil bitmap across the fold line.
+    const flapBack = flapPaper.map((p) =>
+      this.reflectPointAcrossLine(p, mid, nUnit)
+    );
+
+    // Shadow under the flap.
+    g.save();
+    g.fillStyle = `rgba(0,0,0,${0.12 * strength})`;
+    g.shadowColor = `rgba(0,0,0,${0.3 * strength})`;
+    g.shadowBlur = 18 * strength + 2;
+    g.shadowOffsetX = 4 * strength;
+    g.shadowOffsetY = 6 * strength;
+    g.beginPath();
+    g.moveTo(flapBack[0].x, flapBack[0].y);
+    for (let i = 1; i < flapBack.length; i++)
+      g.lineTo(flapBack[i].x, flapBack[i].y);
+    g.closePath();
+    g.fill();
+    g.restore();
+
+    // Clip to the flap area (where it appears), then draw the reflected stencil.
+    g.save();
+    g.beginPath();
+    g.moveTo(flapBack[0].x, flapBack[0].y);
+    for (let i = 1; i < flapBack.length; i++)
+      g.lineTo(flapBack[i].x, flapBack[i].y);
+    g.closePath();
+    g.clip();
+
+    // Apply reflection transform across the fold line: X' = M + R*(X-M), where R = I - 2nn^T
+    const nx = nUnit.x,
+      ny = nUnit.y;
+    const a = 1 - 2 * nx * nx;
+    const b = -2 * nx * ny;
+    const c = -2 * nx * ny;
+    const d = 1 - 2 * ny * ny;
+    const e = mid.x - (a * mid.x + c * mid.y);
+    const f = mid.y - (b * mid.x + d * mid.y);
+    g.transform(a, b, c, d, e, f);
+
+    g.save();
+    g.translate(inst.x, inst.y);
+    g.rotate(inst.rotation);
+    g.scale(inst.scale, inst.scale);
+    g.globalAlpha = 0.95;
+    g.drawImage(inst.bitmap, -inst.bitmap.width / 2, -inst.bitmap.height / 2);
+    g.restore();
+    g.restore();
+
+    // 3) Crease along the fold line segment on the paper (subtle).
+    if (clipped.intersections && clipped.intersections.length >= 2) {
+      const a0 = clipped.intersections[0];
+      const b0 = clipped.intersections[1];
+      g.save();
+      g.strokeStyle = `rgba(255,255,255,${0.32 * strength})`;
+      g.lineWidth = 1.2;
+      g.lineCap = "round";
+      g.beginPath();
+      g.moveTo(a0.x, a0.y);
+      g.lineTo(b0.x, b0.y);
+      g.stroke();
+      g.strokeStyle = `rgba(0,0,0,${0.16 * strength})`;
+      g.lineWidth = 1;
+      g.beginPath();
+      g.moveTo(a0.x, a0.y);
+      g.lineTo(b0.x, b0.y);
+      g.stroke();
+      g.restore();
+    }
+  }
+
+  drawPeelEffect(g, inst, peel) {
+    if (!peel || peel.progress <= 0) return;
+
+    const hp = this.getHandlePositions(inst);
+    const anchor = hp.se;
+    const maxLen = peel.maxLen || this.computePeelMaxLen(inst);
+    const dir = peel.vector || { x: -Math.SQRT1_2, y: -Math.SQRT1_2 };
+    const tip = peel.tip || {
+      x: anchor.x + dir.x * maxLen * peel.progress,
+      y: anchor.y + dir.y * maxLen * peel.progress,
+    };
+
+    const vx = tip.x - anchor.x;
+    const vy = tip.y - anchor.y;
+    const vLen = Math.hypot(vx, vy);
+    if (vLen < 1e-3) return;
+
+    // Fold line is the perpendicular bisector of anchor->tip.
+    const mid = { x: (anchor.x + tip.x) / 2, y: (anchor.y + tip.y) / 2 };
+    const nUnit = { x: vx / vLen, y: vy / vLen }; // unit normal of fold line
+
+    // Paper quad in stage coordinates.
+    const paper = [hp.nw, hp.ne, hp.se, hp.sw];
+
+    // Flap region (in paper space) is the half-plane containing the original corner (anchor).
+    const clipped = this.clipConvexPolygonHalfPlane(paper, mid, {
+      x: vx,
+      y: vy,
+    });
+    const flapPaper = clipped.poly;
+    if (!flapPaper || flapPaper.length < 3) return;
+
+    // 1) Remove flap area from the "front" stencil overlay.
+    g.save();
+    g.globalCompositeOperation = "destination-out";
+    g.beginPath();
+    g.moveTo(flapPaper[0].x, flapPaper[0].y);
+    for (let i = 1; i < flapPaper.length; i++)
+      g.lineTo(flapPaper[i].x, flapPaper[i].y);
+    g.closePath();
+    g.fillStyle = "#000";
+    g.fill();
+    g.restore();
+
+    // 2) Draw the flap moved into place (reflect across fold line).
+    const flapBack = flapPaper.map((p) =>
+      this.reflectPointAcrossLine(p, mid, nUnit)
+    );
+
+    g.save();
+    const grad = g.createLinearGradient(mid.x, mid.y, tip.x, tip.y);
+    grad.addColorStop(0, `rgba(255,255,255,${0.62 * peel.progress})`);
+    grad.addColorStop(0.6, `rgba(235,235,235,${0.16 + 0.18 * peel.progress})`);
+    grad.addColorStop(1, `rgba(0,0,0,${0.14 * peel.progress})`);
+    g.fillStyle = grad;
+    g.beginPath();
+    g.moveTo(flapBack[0].x, flapBack[0].y);
+    for (let i = 1; i < flapBack.length; i++)
+      g.lineTo(flapBack[i].x, flapBack[i].y);
+    g.closePath();
+    g.fill();
+    g.restore();
+
+    // 3) Draw a subtle crease along the fold line segment on the paper.
+    if (clipped.intersections && clipped.intersections.length >= 2) {
+      const a = clipped.intersections[0];
+      const b = clipped.intersections[1];
+      g.save();
+      g.strokeStyle = `rgba(0,0,0,${0.16 * peel.progress})`;
+      g.lineWidth = 1.25;
+      g.lineCap = "round";
+      g.beginPath();
+      g.moveTo(a.x, a.y);
+      g.lineTo(b.x, b.y);
+      g.stroke();
+      g.restore();
+    }
   }
 
   instanceLocalToStage(inst) {
