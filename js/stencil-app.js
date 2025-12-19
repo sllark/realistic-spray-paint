@@ -166,6 +166,50 @@ class StencilApp {
 
   async init() {
     window.addEventListener("resize", this.resize);
+    // Listen for orientation changes to update canvas orientation in real-time
+    window.addEventListener("orientationchange", () => {
+      // Stop any active drawing when orientation changes
+      if (this.spray && this.spray.isDrawing) {
+        this.spray.stopDrawing();
+        // Clear any partial stroke on orientation change
+        if (this.strokeCanvas) {
+          this.strokeCtx.clearRect(
+            0,
+            0,
+            this.strokeCanvas.width,
+            this.strokeCanvas.height
+          );
+        }
+        if (this.spray) {
+          this.spray._strokeDirty = false;
+        }
+      }
+      // Small delay to ensure orientation is fully updated
+      setTimeout(() => this.resize(), 100);
+    });
+    // Also listen for media query changes (more reliable on some devices)
+    if (window.matchMedia) {
+      const mq = window.matchMedia("(orientation: portrait)");
+      mq.addEventListener("change", () => {
+        // Stop any active drawing when orientation changes
+        if (this.spray && this.spray.isDrawing) {
+          this.spray.stopDrawing();
+          // Clear any partial stroke on orientation change
+          if (this.strokeCanvas) {
+            this.strokeCtx.clearRect(
+              0,
+              0,
+              this.strokeCanvas.width,
+              this.strokeCanvas.height
+            );
+          }
+          if (this.spray) {
+            this.spray._strokeDirty = false;
+          }
+        }
+        this.resize();
+      });
+    }
     this.resize();
 
     // Listen for certificate.html stageBg re-renders so we can capture a clean base image
@@ -735,8 +779,8 @@ class StencilApp {
           }
 
           // Check if both minimums are met: 7s black, 5s gold
-          const blackMet = this.paintTimeBlackMs >= 6000;
-          const goldMet = this.paintTimeGoldMs >= 3000;
+          const blackMet = this.paintTimeBlackMs >= 6500;
+          const goldMet = this.paintTimeGoldMs >= 3500;
 
           if (blackMet && goldMet && !this.peelHintUnlocked) {
             this.peelHintUnlocked = true;
@@ -763,11 +807,13 @@ class StencilApp {
           Array.isArray(this.spray.drips) &&
           this.spray.drips.length > 0;
         // Only bake drips when user is NOT actively drawing and there is fresh stroke content
+        // In locked stencil mode, don't composite during painting - wait for peel event
         if (
           hasDrips &&
           this.spray &&
           !this.spray.isDrawing &&
-          this.spray._strokeDirty
+          this.spray._strokeDirty &&
+          !this.lockedStencilMode
         ) {
           this.compositeStroke();
           // Clear the stroke layer after baking so next drip frame draws fresh
@@ -963,12 +1009,29 @@ class StencilApp {
     // In fixed/locked stencil mode (e.g. certificate page) the stage can be small on mobile.
     // Do NOT apply the large minimums there, or canvases will become larger than the stage
     // and the stencil/background will drift out of alignment.
-    const w = this.lockedStencilMode
+
+    // Check if we're in mobile landscape mode (from certificate.html)
+    const isMobileLandscape =
+      typeof window !== "undefined" &&
+      window.__certificateLandscapeMode === true;
+    const isPortrait =
+      typeof window !== "undefined" && window.__certificateIsPortrait === true;
+
+    // On mobile in portrait, the stage dimensions are already swapped by fitStage()
+    // so we use the rect dimensions directly which should be in landscape orientation
+    let w = this.lockedStencilMode
       ? Math.max(1, rect.width)
       : Math.max(320, rect.width);
-    const h = this.lockedStencilMode
+    let h = this.lockedStencilMode
       ? Math.max(1, rect.height)
       : Math.max(400, rect.height);
+
+    // Ensure landscape orientation on mobile (width > height for 16:9)
+    if (isMobileLandscape && isPortrait && h > w) {
+      // If somehow height > width, swap them to maintain landscape
+      [w, h] = [h, w];
+    }
+
     [this.paintCanvas, this.strokeCanvas, this.guideCanvas].forEach((c) => {
       const wasW = c.width,
         wasH = c.height;
@@ -1367,6 +1430,32 @@ class StencilApp {
 
   // Stage interactions: select/move, press with two fingers to rotate/scale (simple)
   onStagePointerDown(e) {
+    // Try fullscreen on first interaction (Android mobile only - iOS doesn't support it)
+    if (typeof window !== "undefined" && !window.__fullscreenAttempted) {
+      const isMobile = window.matchMedia("(max-width: 768px)").matches;
+      // Skip iOS as it doesn't support Fullscreen API
+      const isIOS =
+        /iPad|iPhone|iPod/.test(navigator.userAgent) ||
+        (navigator.platform === "MacIntel" && navigator.maxTouchPoints > 1);
+
+      if (isMobile && !isIOS) {
+        window.__fullscreenAttempted = true;
+        const elem = document.documentElement;
+        if (elem.requestFullscreen) {
+          // Standard API (Chrome, Firefox, Edge on Android)
+          elem.requestFullscreen().catch(() => {});
+        } else if (elem.webkitRequestFullscreen) {
+          elem.webkitRequestFullscreen();
+        } else if (elem.webkitRequestFullScreen) {
+          elem.webkitRequestFullScreen();
+        } else if (elem.mozRequestFullScreen) {
+          elem.mozRequestFullScreen();
+        } else if (elem.msRequestFullscreen) {
+          elem.msRequestFullscreen();
+        }
+      }
+    }
+
     e.preventDefault();
     const { x, y } = this.toStage(e);
     try {
@@ -1376,6 +1465,8 @@ class StencilApp {
 
     // Locked (fixed-stencil) mode: always paint; no selecting/moving/resizing.
     if (this.lockedStencilMode) {
+      // Disable painting if stencil has been removed
+      if (this.stencilRemoved) return;
       // Allow peeling the fixed stencil from the bottom-right corner instead of painting.
       if (this.tryStartPeel(x, y, e.pointerId)) return;
       // If a peel is mid-animation, ignore paint input until it settles.
@@ -1388,7 +1479,8 @@ class StencilApp {
 
       // Before we begin a new stroke: if there are pending drips on the stroke layer,
       // bake them to the paint layer so clearing doesn't truncate them.
-      if (this.spray && this.spray._strokeDirty) {
+      // In locked stencil mode, don't composite during painting - wait for peel event
+      if (this.spray && this.spray._strokeDirty && !this.lockedStencilMode) {
         try {
           this.compositeStroke();
           this.strokeCtx.clearRect(
@@ -1453,7 +1545,8 @@ class StencilApp {
     // start spraying (empty area or already-selected)
     // Before we begin a new stroke: if there are pending drips on the stroke layer,
     // bake them to the paint layer so clearing doesn't truncate them.
-    if (this.spray && this.spray._strokeDirty) {
+    // In locked stencil mode, don't composite during painting - wait for peel event
+    if (this.spray && this.spray._strokeDirty && !this.lockedStencilMode) {
       try {
         this.compositeStroke();
         this.strokeCtx.clearRect(
@@ -1566,13 +1659,24 @@ class StencilApp {
 
     if (this.spray.isDrawing) {
       const { x, y } = this.toStage(e);
+      // Disable painting if stencil has been removed
+      if (this.stencilRemoved) return;
       // Draw live to stroke layer only; bake on pointer up
       this.spray.draw(x, y, 1.0);
       return;
     }
 
     // Locked/certificate mode: show pointer cursor over the peel hint/hotspot.
-    if (!this.activePointerId && e.pointerType !== "touch" && this.lockedStencilMode) {
+    if (
+      !this.activePointerId &&
+      e.pointerType !== "touch" &&
+      this.lockedStencilMode
+    ) {
+      // Disable painting if stencil has been removed
+      if (this.stencilRemoved) {
+        this.setStageCursor("default");
+        return;
+      }
       const { x, y } = this.toStage(e);
       this.setStageCursor(
         this.isOverPeelHint(x, y) ? "pointer" : this._canCursor || "default"
@@ -1622,22 +1726,63 @@ class StencilApp {
     if (this.spray.isDrawing) {
       this.spray.stopDrawing();
       // finalize last stroke composite
-      this.compositeStroke();
-      // clear stroke layer
-      this.strokeCtx.clearRect(
-        0,
-        0,
-        this.strokeCanvas.width,
-        this.strokeCanvas.height
-      );
-      if (this.spray) this.spray._strokeDirty = false;
+      // In locked stencil mode, don't composite during painting - wait for peel event
+      if (!this.lockedStencilMode) {
+        this.compositeStroke();
+        // clear stroke layer
+        this.strokeCtx.clearRect(
+          0,
+          0,
+          this.strokeCanvas.width,
+          this.strokeCanvas.height
+        );
+        this.spray._strokeDirty = false;
+      }
       this._strokeStartTs = 0;
     }
   }
 
   toStage(e) {
     const r = this.paintCanvas.getBoundingClientRect();
-    return { x: e.clientX - r.left, y: e.clientY - r.top };
+    let x = e.clientX - r.left;
+    let y = e.clientY - r.top;
+
+    // Account for CSS rotation transform in mobile portrait mode
+    const isMobileLandscape =
+      typeof window !== "undefined" &&
+      window.__certificateLandscapeMode === true;
+    const isPortrait =
+      typeof window !== "undefined" && window.__certificateIsPortrait === true;
+
+    if (isMobileLandscape && isPortrait) {
+      // The app is rotated 90deg clockwise, so we need to transform coordinates
+      // When canvas is rotated 90deg clockwise:
+      // - Canvas's top edge (y=0) is now on visual right edge
+      // - Canvas's right edge (x=canvasWidth) is now on visual bottom edge
+      // - Canvas's bottom edge (y=canvasHeight) is now on visual left edge
+      // - Canvas's left edge (x=0) is now on visual top edge
+      //
+      // After 90deg rotation, bounding rect dimensions are swapped:
+      // - r.width = actual canvas height
+      // - r.height = actual canvas width
+      //
+      // Visual coordinates (x, y) relative to rotated bounding rect:
+      // - x ranges from 0 to r.width (which is canvas height)
+      // - y ranges from 0 to r.height (which is canvas width)
+      //
+      // Visual to canvas transformation (reverse the 90deg clockwise rotation):
+      // - canvas_x = y              (visual Y becomes canvas X)
+      // - canvas_y = r.width - x    (invert visual X, use r.width as canvas height)
+      const canvasWidth = r.height; // After rotation, height is the canvas width
+      const canvasHeight = r.width; // After rotation, width is the canvas height
+
+      const newX = y;
+      const newY = canvasHeight - x;
+      x = newX;
+      y = newY;
+    }
+
+    return { x, y };
   }
 
   // Coarse bbox hit-test with rotation bounding box approximation
@@ -2138,11 +2283,14 @@ class StencilApp {
     const up = this.normalizeVec(hp.ne.x - anchor.x, hp.ne.y - anchor.y);
     const left = this.normalizeVec(hp.sw.x - anchor.x, hp.sw.y - anchor.y);
     const t = (this._peelHintAnim && this._peelHintAnim.phase) || 0;
-    const pulse = 1 + 0.14 * Math.sin(t * 2.0);
-    const wobble = 0.012 * Math.sin(t * 3.2);
+    // Reduced pulse effect for smaller, less animated hint
+    const pulse = 1 + 0.05 * Math.sin(t * 2.0);
+    // Remove wobble to stop movement - set to 0
+    const wobble = 0;
     const maxLen = this.computePeelMaxLen(inst);
     const diag = this.normalizeVec(up.x + left.x, up.y + left.y);
-    const base = 0.05;
+    // Reduced base size to make hint smaller
+    const base = 0.03;
     const hintProgress = this.clamp01(base * pulse + wobble);
     const tip = {
       x: anchor.x + diag.x * maxLen * hintProgress,
@@ -2337,8 +2485,12 @@ class StencilApp {
     if (!this.stageBgCanvas || !this.stageBgCtx) return;
     if (!this._stageBgBase) return;
 
-    const stageW = this.stageBgCanvas.width / this.dpr;
-    const stageH = this.stageBgCanvas.height / this.dpr;
+    // Use the same rounding as onStageBgRendered to ensure dimensions match exactly
+    const stageW = Math.max(1, Math.round(this.stageBgCanvas.width / this.dpr));
+    const stageH = Math.max(
+      1,
+      Math.round(this.stageBgCanvas.height / this.dpr)
+    );
     const g = this.stageBgCtx;
     g.setTransform(this.dpr, 0, 0, this.dpr, 0, 0);
     g.clearRect(0, 0, stageW, stageH);
@@ -2347,13 +2499,25 @@ class StencilApp {
     if (this.stencilRemoved) return;
 
     // Draw base certificate background first.
+    // Use the exact dimensions of _stageBgBase to avoid any pixel misalignment
     const fade =
       this.peelState && typeof this.peelState.fadeAlpha === "number"
         ? this.peelState.fadeAlpha
         : 1;
     g.save();
     g.globalAlpha = fade;
-    g.drawImage(this._stageBgBase, 0, 0, stageW, stageH);
+    // Use _stageBgBase's actual dimensions to ensure perfect alignment
+    g.drawImage(
+      this._stageBgBase,
+      0,
+      0,
+      this._stageBgBase.width,
+      this._stageBgBase.height,
+      0,
+      0,
+      stageW,
+      stageH
+    );
     g.restore();
 
     const inst = this.getPeelTargetInstance();
@@ -2431,8 +2595,7 @@ class StencilApp {
     const anchor = this.getPeelAnchor(inst);
     // Use an expanded hit area when the hint is visible so clicks near the hint still start peel.
     const r =
-      this.getPeelHandleRadius(inst) *
-      (this.peelHintUnlocked ? 1.65 : 1.25);
+      this.getPeelHandleRadius(inst) * (this.peelHintUnlocked ? 1.65 : 1.25);
     if (Math.hypot(x - anchor.x, y - anchor.y) > r) return false;
 
     const maxLen = this.computePeelMaxLen(inst);
@@ -2514,7 +2677,11 @@ class StencilApp {
   isOverPeelHint(x, y) {
     if (!this.lockedStencilMode || this.stencilRemoved) return false;
     if (!this.peelHintUnlocked) return false;
-    if (!this.peelState || this.peelState.dragging || this.peelState.progress > 0)
+    if (
+      !this.peelState ||
+      this.peelState.dragging ||
+      this.peelState.progress > 0
+    )
       return false;
     const inst = this.getPeelTargetInstance();
     if (!inst) return false;
@@ -2629,6 +2796,101 @@ class StencilApp {
 
   finishPeelRemoval() {
     if (this.stencilRemoved) return;
+
+    // Before removing stencil, composite all paint with stencil mask
+    // This applies the stencil mask to all accumulated paint
+    if (this.lockedStencilMode) {
+      // Ensure we have the stencil instance before removing it
+      const inst = this.getPeelTargetInstance();
+      if (inst && this.instances.length > 0) {
+        // Temporarily set clipToStencil to true to apply mask to all paint
+        const wasClipToStencil = this.clipToStencil;
+        this.clipToStencil = true;
+
+        try {
+          // First, composite any paint from strokeCanvas to paintCanvas with mask
+          // This ensures all accumulated paint on stroke layer gets masked
+          this.compositeStroke();
+
+          // Now apply the stencil mask to any paint already on paintCanvas
+          // Use the same approach as compositeStroke() to ensure consistency
+          for (const instance of this.instances) {
+            const bbox = this.rotatedBbox(instance);
+
+            // Create a clip canvas for this stencil's bbox region
+            const clip = document.createElement("canvas");
+            clip.width = Math.ceil(bbox.w * this.dpr);
+            clip.height = Math.ceil(bbox.h * this.dpr);
+            const cg = clip.getContext("2d");
+            cg.setTransform(1, 0, 0, 1, 0, 0);
+
+            // Draw the paint canvas region into the clip canvas
+            cg.drawImage(
+              this.paintCanvas,
+              Math.floor(bbox.x * this.dpr),
+              Math.floor(bbox.y * this.dpr),
+              Math.ceil(bbox.w * this.dpr),
+              Math.ceil(bbox.h * this.dpr),
+              0,
+              0,
+              Math.ceil(bbox.w * this.dpr),
+              Math.ceil(bbox.h * this.dpr)
+            );
+
+            // Apply stencil mask using destination-in (same as compositeStroke)
+            cg.globalCompositeOperation = "destination-in";
+            const m = instance.maskCanvas;
+            const sx = instance.x - bbox.x;
+            const sy = instance.y - bbox.y;
+            cg.save();
+            cg.translate(Math.round(sx * this.dpr), Math.round(sy * this.dpr));
+            cg.rotate(instance.rotation);
+            cg.scale(instance.scale * this.dpr, instance.scale * this.dpr);
+            cg.translate(-m.width / 2, -m.height / 2);
+            cg.drawImage(m, 0, 0);
+            cg.restore();
+
+            // Clear the original region and composite the masked result back
+            this.paintCtx.save();
+            this.paintCtx.globalCompositeOperation = "destination-out";
+            this.paintCtx.fillStyle = "#000";
+            this.paintCtx.beginPath();
+            // Draw a rotated rectangle to clear the exact region
+            const hp = this.getHandlePositions(instance);
+            this.paintCtx.moveTo(hp.nw.x, hp.nw.y);
+            this.paintCtx.lineTo(hp.ne.x, hp.ne.y);
+            this.paintCtx.lineTo(hp.se.x, hp.se.y);
+            this.paintCtx.lineTo(hp.sw.x, hp.sw.y);
+            this.paintCtx.closePath();
+            this.paintCtx.fill();
+            this.paintCtx.restore();
+
+            // Composite the masked clip back onto paint canvas
+            this.paintCtx.save();
+            this.paintCtx.globalCompositeOperation = "source-over";
+            this.paintCtx.drawImage(clip, bbox.x, bbox.y, bbox.w, bbox.h);
+            this.paintCtx.restore();
+          }
+
+          // Clear the stroke layer after compositing
+          this.strokeCtx.clearRect(
+            0,
+            0,
+            this.strokeCanvas.width,
+            this.strokeCanvas.height
+          );
+          if (this.spray) {
+            this.spray._strokeDirty = false;
+          }
+        } catch (e) {
+          console.error("Error compositing stroke on peel:", e);
+        } finally {
+          // Restore original clipToStencil setting
+          this.clipToStencil = wasClipToStencil;
+        }
+      }
+    }
+
     this.stencilRemoved = true;
     if (this.peelState) {
       this.peelState.removed = true;
@@ -2642,6 +2904,20 @@ class StencilApp {
     this.clipToStencil = false;
     this.redrawStageBg(); // also hide stage background
     this.redrawGuides();
+
+    // Show certificate base image, hide spray cans, and disable painting
+    const certificateBaseImg = document.getElementById("certificateBaseImage");
+    const sprayCans = document.getElementById("sprayCans");
+    if (certificateBaseImg) {
+      certificateBaseImg.style.display = "block";
+    }
+    if (sprayCans) {
+      sprayCans.style.display = "none";
+    }
+    // Disable painting by stopping any active drawing
+    if (this.spray && this.spray.isDrawing) {
+      this.spray.stopDrawing();
+    }
   }
 
   drawPeelHint(g, inst) {

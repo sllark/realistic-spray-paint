@@ -2,7 +2,17 @@
 <html lang="en">
   <head>
     <meta charset="UTF-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta
+      name="viewport"
+      content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover"
+    />
+    <!-- iOS fullscreen support -->
+    <meta name="apple-mobile-web-app-capable" content="yes" />
+    <meta
+      name="apple-mobile-web-app-status-bar-style"
+      content="black-translucent"
+    />
+    <meta name="mobile-web-app-capable" content="yes" />
     <title>Spray + Certificate Stencil</title>
     <link rel="stylesheet" href="styles.css" />
     <style>
@@ -38,7 +48,6 @@
         flex-direction: column;
         justify-content: center;
         align-items: center;
-        padding-bottom: calc(env(safe-area-inset-bottom) + 60px);
         min-height: 100svh;
         height: 100svh;
         width: 100vw;
@@ -100,7 +109,7 @@
       .spray-cans {
         position: absolute;
         left: 45px;
-        bottom: calc(env(safe-area-inset-bottom) + 45px);
+        bottom: calc(env(safe-area-inset-bottom) + 4px);
         display: flex;
         gap: 10px;
         z-index: 5;
@@ -119,15 +128,13 @@
         width: 30px;
       }
 
-      #guideCanvas{
-        opacity: 0.1;
+      #guideCanvas {
+        opacity: 0.35;
       }
       /* Small screens: keep cans smaller and OUTSIDE the canvas */
       @media (max-width: 768px) {
         .spray-cans {
-          position: fixed;
-          right: 12px;
-          bottom: calc(env(safe-area-inset-bottom) + 12px);
+          position: absolute;
           z-index: 10002;
           gap: 8px;
         }
@@ -139,16 +146,29 @@
         }
       }
 
-      /* Landscape fullscreen: avoid biasing the stage upward (keeps crop visually centered). */
-      @media (orientation: landscape) {
+      /* Force landscape presentation on portrait mobile by rotating the app. */
+      @media (max-width: 768px) and (orientation: portrait) {
+        body.certificate {
+          overflow: hidden;
+        }
         #stencilApp {
+          position: fixed;
+          inset: 0;
+          width: 100vh;
+          height: 100vw;
+          transform: rotate(90deg) translate(0, 0);
+          transform-origin: center center;
+          justify-content: end;
           padding-bottom: 0;
         }
-        .hud {
-          bottom: calc(env(safe-area-inset-bottom) + 10px);
+        .stage {
+          margin: 0 auto;
+          width: 100%;
+          height: 100%;
         }
-        .spray-cans {
-          bottom: calc(env(safe-area-inset-bottom) + 10px);
+        .hud {
+          transform: rotate(-90deg);
+          transform-origin: center center;
         }
       }
     </style>
@@ -165,12 +185,29 @@
         <!-- Keep tray element for compatibility, but it stays hidden in this mode -->
         <div class="tray" id="stencilTray"></div>
 
+        <!-- Certificate base image (shown after peel) -->
+        <img
+          id="certificateBaseImage"
+          src="assets/certificate-base.jpg"
+          alt="Certificate Base"
+          class="certificate-base"
+          style="
+            display: none;
+            position: absolute;
+            inset: 0;
+            width: 100%;
+            height: 100%;
+            object-fit: contain;
+            pointer-events: none;
+          "
+        />
+
         <!-- Layers: guide > stroke > paint -->
         <canvas id="paintCanvas" class="stage-layer"></canvas>
         <canvas id="strokeCanvas" class="stage-layer"></canvas>
         <canvas id="guideCanvas" class="stage-layer"></canvas>
 
-        <div class="spray-cans">
+        <div class="spray-cans" id="sprayCans">
           <img
             src="assets/spray-can-gold.png"
             alt="Spray Can Gold"
@@ -212,18 +249,49 @@
 
         function fitStage() {
           // Force a 16:9 landscape viewport for the stage, bounded by window size.
-          const maxW = Math.max(1, window.innerWidth);
-          const maxH = Math.max(1, window.innerHeight);
-          let w = maxW;
+          const isMobile = window.matchMedia("(max-width: 768px)").matches;
+          const isPortrait =
+            window.matchMedia &&
+            window.matchMedia("(orientation: portrait)").matches;
+
+          // On mobile, always force landscape mode (16:9)
+          // When device is in portrait, swap dimensions: device height becomes width, width becomes height
+          let viewW, viewH;
+          if (isMobile && isPortrait) {
+            // Mobile portrait: swap dimensions to force landscape
+            viewW = Math.max(1, window.innerHeight);
+            viewH = Math.max(1, window.innerWidth);
+          } else if (isMobile) {
+            // Mobile landscape: use dimensions as-is
+            viewW = Math.max(1, window.innerWidth);
+            viewH = Math.max(1, window.innerHeight);
+          } else {
+            // Desktop: swap viewport dims in portrait so the stage remains landscape
+            viewW = Math.max(
+              1,
+              isPortrait ? window.innerHeight : window.innerWidth
+            );
+            viewH = Math.max(
+              1,
+              isPortrait ? window.innerWidth : window.innerHeight
+            );
+          }
+
+          // Calculate dimensions maintaining 16:9 aspect ratio
+          let w = viewW;
           let h = Math.round(w / TARGET_AR);
-          if (h > maxH) {
-            h = maxH;
+          if (h > viewH) {
+            h = viewH;
             w = Math.round(h * TARGET_AR);
           }
           const wPx = Math.round(w);
           const hPx = Math.round(h);
           stage.style.width = wPx + "px";
           stage.style.height = hPx + "px";
+
+          // Store orientation info for canvas resize functions
+          window.__certificateLandscapeMode = isMobile;
+          window.__certificateIsPortrait = isPortrait;
 
           // (Re)draw background to match the current stage size & crop mode
           drawBg();
@@ -251,13 +319,122 @@
 
           // Notify StencilApp so it can capture a clean base and apply peel to stageBg too.
           window.dispatchEvent(
-            new CustomEvent("stagebg:rendered", { detail: { canvas: bgCanvas } })
+            new CustomEvent("stagebg:rendered", {
+              detail: { canvas: bgCanvas },
+            })
           );
         }
 
         fitStage();
         window.addEventListener("resize", fitStage, { passive: true });
+        // Listen for orientation changes to update canvas orientation in real-time
+        window.addEventListener("orientationchange", () => {
+          // Small delay to ensure orientation is fully updated
+          setTimeout(fitStage, 100);
+        });
+        // Also listen for media query changes (more reliable on some devices)
+        if (window.matchMedia) {
+          const mq = window.matchMedia("(orientation: portrait)");
+          mq.addEventListener("change", fitStage);
+        }
         bgImg.onload = drawBg;
+      })();
+
+      // Fullscreen functionality for mobile (Android and other non-iOS devices)
+      (function () {
+        const isMobile = window.matchMedia("(max-width: 768px)").matches;
+        if (!isMobile) return;
+
+        // Detect iOS - skip fullscreen on iOS as it's not supported
+        const isIOS =
+          /iPad|iPhone|iPod/.test(navigator.userAgent) ||
+          (navigator.platform === "MacIntel" && navigator.maxTouchPoints > 1);
+
+        if (isIOS) return; // iOS doesn't support Fullscreen API
+
+        function requestFullscreen() {
+          const elem = document.documentElement;
+          if (elem.requestFullscreen) {
+            // Standard API (Chrome, Firefox, Edge on Android)
+            elem.requestFullscreen().catch((err) => {
+              // Silently handle errors (user may have denied or already in fullscreen)
+              if (err.name !== "NotAllowedError" && err.name !== "TypeError") {
+                console.log("Fullscreen request failed:", err);
+              }
+            });
+          } else if (elem.webkitRequestFullscreen) {
+            // WebKit (older Chrome/Safari)
+            elem.webkitRequestFullscreen();
+          } else if (elem.webkitRequestFullScreen) {
+            // Older WebKit
+            elem.webkitRequestFullScreen();
+          } else if (elem.mozRequestFullScreen) {
+            // Firefox
+            elem.mozRequestFullScreen();
+          } else if (elem.msRequestFullscreen) {
+            // IE/Edge
+            elem.msRequestFullscreen();
+          }
+        }
+
+        // Check if already in fullscreen
+        function isFullscreen() {
+          return !!(
+            document.fullscreenElement ||
+            document.webkitFullscreenElement ||
+            document.mozFullScreenElement ||
+            document.msFullscreenElement
+          );
+        }
+
+        // Try to enter fullscreen on first user interaction (touch/click)
+        let fullscreenAttempted = false;
+        const tryFullscreenOnUserGesture = (e) => {
+          if (!fullscreenAttempted && !isFullscreen()) {
+            fullscreenAttempted = true;
+            // Must be called synchronously within the event handler to preserve user gesture
+            requestFullscreen();
+          }
+        };
+
+        // Listen for user interaction events to trigger fullscreen
+        // Use capture phase with highest priority (before other handlers)
+        // Use passive: false to ensure we can prevent default if needed
+        const options = { once: true, passive: false, capture: true };
+
+        // Attach to window first to catch events earliest, before any preventDefault calls
+        window.addEventListener(
+          "touchstart",
+          tryFullscreenOnUserGesture,
+          options
+        );
+        window.addEventListener(
+          "touchend",
+          tryFullscreenOnUserGesture,
+          options
+        );
+        window.addEventListener(
+          "pointerdown",
+          tryFullscreenOnUserGesture,
+          options
+        );
+
+        // Also attach to document as fallback
+        document.addEventListener(
+          "touchstart",
+          tryFullscreenOnUserGesture,
+          options
+        );
+        document.addEventListener(
+          "touchend",
+          tryFullscreenOnUserGesture,
+          options
+        );
+        document.addEventListener(
+          "pointerdown",
+          tryFullscreenOnUserGesture,
+          options
+        );
       })();
     </script>
     <script src="js/spray.js"></script>
