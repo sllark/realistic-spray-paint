@@ -31,16 +31,34 @@
       html,
       body {
         height: 100%;
+        height: 100vh; /* Fallback for older browsers */
+        height: 100dvh; /* Dynamic viewport height for mobile browsers */
+        margin: 0;
+        padding: 0;
+        overflow: hidden;
+        position: fixed;
+        width: 100%;
+        /* Use CSS variable for Safari mobile compatibility */
+        height: calc(var(--vh, 1vh) * 100);
       }
 
       body.certificate {
         background: var(--bg) url("assets/bg-2.webp") center / cover no-repeat
           fixed;
         margin: 0;
+        padding: 0;
         font-family: "ArchimotoV01-Regular", system-ui, -apple-system, Segoe UI,
           Roboto, Helvetica, Arial, sans-serif;
-        min-height: 100svh;
+        min-height: 100vh;
+        min-height: 100dvh; /* Dynamic viewport height */
+        height: 100vh;
+        height: 100dvh;
+        height: calc(var(--vh, 1vh) * 100); /* Safari mobile fix */
+        width: 100vw;
         overflow: hidden;
+        position: fixed;
+        top: 0;
+        left: 0;
       }
 
       #stencilApp {
@@ -48,10 +66,16 @@
         flex-direction: column;
         justify-content: center;
         align-items: center;
-        min-height: 100svh;
-        height: 100svh;
+        min-height: 100vh;
+        min-height: 100dvh; /* Dynamic viewport height */
+        height: 100vh;
+        height: 100dvh;
+        height: calc(var(--vh, 1vh) * 100); /* Safari mobile fix */
         width: 100vw;
         overflow: hidden;
+        position: fixed;
+        top: 0;
+        left: 0;
       }
 
       .stage {
@@ -131,6 +155,63 @@
       #guideCanvas {
         opacity: 0.35;
       }
+
+      /* Tooltips */
+      .tooltip {
+        position: absolute;
+        background: rgba(0, 0, 0, 0.85);
+        color: #fff;
+        padding: 8px;
+        border-radius: 4px;
+        font-size: 12px;
+        font-weight: 500;
+        text-transform: uppercase;
+        pointer-events: none;
+        z-index: 10003;
+        opacity: 0;
+        transform: translateY(10px);
+        transition: opacity 0.3s ease, transform 0.4s ease;
+        box-shadow: 0 4px 12px rgba(0, 0, 0, 0.3);
+      }
+
+      .tooltip.show {
+        opacity: 1;
+        transform: translateY(0);
+      }
+
+      /* Hover/move animation for tooltips */
+      .tooltip.show {
+        animation: tooltipHover 3.5s ease-in-out infinite;
+      }
+
+      @keyframes tooltipHover {
+        0%,
+        100% {
+          transform: translateY(0) translateX(0);
+        }
+        25% {
+          transform: translateY(-2px) translateX(1px);
+        }
+        50% {
+          transform: translateY(-4px) translateX(0);
+        }
+        75% {
+          transform: translateY(-2px) translateX(-1px);
+        }
+      }
+
+      .tooltip-spray-cans {
+        width: 160px;
+        top: 16px;
+        left: calc(100% + 5px);
+      }
+
+      .tooltip-peel-hint {
+        right: 60px;
+        bottom: calc(env(safe-area-inset-bottom) + 25px);
+        width: 195px;
+      }
+
       /* Small screens: keep cans smaller and OUTSIDE the canvas */
       @media (max-width: 768px) {
         .spray-cans {
@@ -150,12 +231,15 @@
       @media (max-width: 768px) and (orientation: portrait) {
         body.certificate {
           overflow: hidden;
+          height: calc(var(--vh, 1vh) * 100);
         }
         #stencilApp {
           position: fixed;
           inset: 0;
           width: 100vh;
+          width: calc(var(--vh, 1vh) * 100);
           height: 100vw;
+          height: 100dvw; /* Dynamic viewport width */
           transform: rotate(90deg) translate(0, 0);
           transform-origin: center center;
           justify-content: end;
@@ -211,6 +295,11 @@
         <canvas id="guideCanvas" class="stage-layer"></canvas>
 
         <div class="spray-cans" id="sprayCans">
+          <!-- Tooltips -->
+          <div id="sprayCansTooltip" class="tooltip tooltip-spray-cans">
+            CLICK AND DRAG THE CANS TO SPRAY THE STENCIL
+          </div>
+
           <img
             src="assets/spray-can-gold.png"
             alt="Spray Can Gold"
@@ -222,10 +311,56 @@
             class="spray-can-black"
           />
         </div>
+
+        <div id="peelHintTooltip" class="tooltip tooltip-peel-hint">
+          PEEL AWAY THE STENCIL WHEN YOU'VE FINISHED YOUR GRAFFITI
+        </div>
       </div>
     </div>
 
     <script>
+      // Fix Safari mobile viewport height issue
+      (function () {
+        // Set viewport height CSS variable for Safari mobile
+        function setViewportHeight() {
+          const vh = window.innerHeight * 0.01;
+          document.documentElement.style.setProperty("--vh", `${vh}px`);
+        }
+
+        // Set initial height
+        setViewportHeight();
+
+        // Update on resize and orientation change
+        window.addEventListener("resize", setViewportHeight);
+        window.addEventListener("orientationchange", () => {
+          setTimeout(setViewportHeight, 100);
+        });
+
+        // Prevent Safari from showing/hiding address bar on scroll
+        let lastScrollTop = 0;
+        window.addEventListener(
+          "scroll",
+          () => {
+            const currentScroll =
+              window.pageYOffset || document.documentElement.scrollTop;
+            if (currentScroll > lastScrollTop) {
+              // Scrolling down - hide address bar
+              window.scrollTo(0, 1);
+            }
+            lastScrollTop = currentScroll <= 0 ? 0 : currentScroll;
+          },
+          false
+        );
+
+        // Initial scroll to hide address bar
+        window.addEventListener("load", () => {
+          setTimeout(() => {
+            window.scrollTo(0, 1);
+            setViewportHeight();
+          }, 100);
+        });
+      })();
+
       // Keep the stage sized to the certificate asset aspect ratio (3266×1951).
       (function () {
         const FULL_W = 3266;
@@ -442,5 +577,61 @@
     </script>
     <script src="js/spray.js"></script>
     <script src="js/stencil-app.js"></script>
+    <script>
+      // Tooltip management
+      (function () {
+        const sprayCansTooltip = document.getElementById("sprayCansTooltip");
+        const peelHintTooltip = document.getElementById("peelHintTooltip");
+        const sprayCans = document.getElementById("sprayCans");
+
+        // Show spray cans tooltip on page load
+        if (sprayCansTooltip) {
+          // Small delay to ensure page is fully loaded
+          setTimeout(() => {
+            sprayCansTooltip.classList.add("show");
+          }, 500);
+        }
+
+        // Hide spray cans tooltip when user clicks a spray can
+        if (sprayCans) {
+          const hideSprayTooltip = () => {
+            if (sprayCansTooltip) {
+              sprayCansTooltip.classList.remove("show");
+            }
+          };
+
+          // Listen for clicks on spray cans
+          const goldCan = document.querySelector(".spray-can-gold");
+          const blackCan = document.querySelector(".spray-can-black");
+
+          if (goldCan) {
+            goldCan.addEventListener("click", hideSprayTooltip, { once: true });
+          }
+          if (blackCan) {
+            blackCan.addEventListener("click", hideSprayTooltip, {
+              once: true,
+            });
+          }
+        }
+
+        // Show peel hint tooltip when peel hint is unlocked
+        // Listen for the peel-ready event from stencil-app.js
+        window.addEventListener("stencil:peel-ready", () => {
+          if (peelHintTooltip) {
+            setTimeout(() => {
+              peelHintTooltip.classList.add("show");
+            }, 300);
+          }
+        });
+
+        // Hide peel hint tooltip when user clicks the peel hint
+        // Listen for the peel-started event from stencil-app.js
+        window.addEventListener("stencil:peel-started", () => {
+          if (peelHintTooltip) {
+            peelHintTooltip.classList.remove("show");
+          }
+        });
+      })();
+    </script>
   </body>
 </html>

@@ -779,8 +779,8 @@ class StencilApp {
           }
 
           // Check if both minimums are met: 7s black, 5s gold
-          const blackMet = this.paintTimeBlackMs >= 6500;
-          const goldMet = this.paintTimeGoldMs >= 3500;
+          const blackMet = this.paintTimeBlackMs >= 6000;
+          const goldMet = this.paintTimeGoldMs >= 2500;
 
           if (blackMet && goldMet && !this.peelHintUnlocked) {
             this.peelHintUnlocked = true;
@@ -1573,15 +1573,13 @@ class StencilApp {
       this.activePointers.set(e.pointerId, pt);
 
     // Peeling takes precedence over all other interactions (including spraying).
-    // Note: Drag is disabled - peel completes immediately on click, so we skip drag updates
     if (
       this.peelState &&
       this.peelState.dragging &&
       e.pointerId === this.peelState.pointerId
     ) {
       e.preventDefault();
-      // Skip drag updates - peel completes immediately on click
-      // this.updatePeelDrag(pt.x, pt.y);
+      this.updatePeelDrag(pt.x, pt.y);
       return;
     }
 
@@ -1705,16 +1703,14 @@ class StencilApp {
   }
 
   onPointerUp(e) {
-    // Skip releasePeel - peel completes immediately on click, no drag needed
-    // Since dragging is set to false in tryStartPeel, this block won't execute
-    // if (
-    //   this.peelState &&
-    //   this.peelState.dragging &&
-    //   e.pointerId === this.peelState.pointerId
-    // ) {
-    //   e.preventDefault();
-    //   this.releasePeel();
-    // }
+    if (
+      this.peelState &&
+      this.peelState.dragging &&
+      e.pointerId === this.peelState.pointerId
+    ) {
+      e.preventDefault();
+      this.releasePeel();
+    }
     if (e.pointerId === this.activePointerId) {
       this.activePointerId = null;
       this.draggingInstanceId = null;
@@ -2602,7 +2598,11 @@ class StencilApp {
       this.getPeelHandleRadius(inst) * (this.peelHintUnlocked ? 1.65 : 1.25);
     if (Math.hypot(x - anchor.x, y - anchor.y) > r) return false;
 
-    // Immediately trigger peel animation to completion (no drag needed)
+    // Fire event to hide peel hint tooltip
+    if (typeof window !== "undefined") {
+      window.dispatchEvent(new CustomEvent("stencil:peel-started"));
+    }
+
     const maxLen = this.computePeelMaxLen(inst);
     this.peelState.instId = inst.id;
     this.peelState.pointerId = pointerId;
@@ -2805,6 +2805,57 @@ class StencilApp {
     requestAnimationFrame(step);
   }
 
+  // Create a mask canvas that marks regions where active drips exist
+  createDripMask() {
+    if (
+      !this.spray ||
+      !Array.isArray(this.spray.drips) ||
+      this.spray.drips.length === 0
+    ) {
+      return null;
+    }
+
+    const mask = document.createElement("canvas");
+    mask.width = this.paintCanvas.width;
+    mask.height = this.paintCanvas.height;
+    const mg = mask.getContext("2d");
+    mg.fillStyle = "#fff"; // White = preserve (drip region)
+
+    for (const drip of this.spray.drips) {
+      // Calculate drip region: trail from previous position to current, plus head
+      const startY = Math.min(drip.py, drip.y);
+      const endY = Math.max(drip.py, drip.y);
+      const trailLen = Math.abs(drip.y - drip.py);
+
+      // Estimate maximum radius (trail widens as it falls)
+      // Use larger safety margin to ensure we capture the full drip
+      const baseR = drip.baseR || 5;
+      const maxR = Math.max(
+        (drip._maxTrailR || baseR) * this.dpr * 1.5,
+        (drip._maxHeadR || baseR) * this.dpr * 1.5,
+        baseR * 3 * this.dpr // Larger safety margin
+      );
+
+      // Draw trail region (vertical rectangle covering the full trail)
+      if (trailLen > 0.1) {
+        const trailWidth = maxR * 2.5; // Wider to ensure full coverage
+        mg.fillRect(
+          (drip.x - maxR) * this.dpr,
+          startY * this.dpr,
+          trailWidth * this.dpr,
+          trailLen * this.dpr
+        );
+      }
+
+      // Draw head region (circle with extra margin)
+      mg.beginPath();
+      mg.arc(drip.x * this.dpr, drip.y * this.dpr, maxR * 1.2, 0, Math.PI * 2);
+      mg.fill();
+    }
+
+    return mask;
+  }
+
   finishPeelRemoval() {
     if (this.stencilRemoved) return;
 
@@ -2819,9 +2870,30 @@ class StencilApp {
         this.clipToStencil = true;
 
         try {
-          // First, composite any paint from strokeCanvas to paintCanvas with mask
-          // This ensures all accumulated paint on stroke layer gets masked
+          // Step 1: Create a mask for active drips BEFORE compositing
+          // This must be done while drips are still on strokeCanvas
+          const dripMask = this.createDripMask();
+          if (dripMask && typeof window !== "undefined" && window.DEBUG_PEEL) {
+            console.log("[peel] Drip mask created", {
+              dripsCount: this.spray?.drips?.length || 0,
+              maskSize: `${dripMask.width}x${dripMask.height}`,
+            });
+          }
+
+          // Step 2: Save a copy of strokeCanvas BEFORE compositing
+          // This preserves the original drip content for restoration
+          const strokeCanvasCopy = document.createElement("canvas");
+          strokeCanvasCopy.width = this.strokeCanvas.width;
+          strokeCanvasCopy.height = this.strokeCanvas.height;
+          const scg = strokeCanvasCopy.getContext("2d");
+          scg.drawImage(this.strokeCanvas, 0, 0);
+
+          // Step 3: Composite ALL paint (including drips) WITHOUT masking
+          // This preserves all drips on the certificate, even if they extend outside the stencil
+          const wasClipToStencilBefore = this.clipToStencil;
+          this.clipToStencil = false;
           this.compositeStroke();
+          this.clipToStencil = wasClipToStencilBefore;
 
           // Now apply the stencil mask to any paint already on paintCanvas
           // Use the same approach as compositeStroke() to ensure consistency
@@ -2861,6 +2933,69 @@ class StencilApp {
             cg.drawImage(m, 0, 0);
             cg.restore();
 
+            // If we have a drip mask, preserve drip regions by combining with stencil mask
+            if (dripMask) {
+              // Get the original paint content before masking
+              const paintRegion = document.createElement("canvas");
+              paintRegion.width = Math.ceil(bbox.w * this.dpr);
+              paintRegion.height = Math.ceil(bbox.h * this.dpr);
+              const prg = paintRegion.getContext("2d");
+              prg.drawImage(
+                this.paintCanvas,
+                Math.floor(bbox.x * this.dpr),
+                Math.floor(bbox.y * this.dpr),
+                Math.ceil(bbox.w * this.dpr),
+                Math.ceil(bbox.h * this.dpr),
+                0,
+                0,
+                Math.ceil(bbox.w * this.dpr),
+                Math.ceil(bbox.h * this.dpr)
+              );
+
+              // Create combined mask: stencil OR drips (keep paint if in either region)
+              const combinedMask = document.createElement("canvas");
+              combinedMask.width = Math.ceil(bbox.w * this.dpr);
+              combinedMask.height = Math.ceil(bbox.h * this.dpr);
+              const cmg = combinedMask.getContext("2d");
+
+              // Start with black (remove everything)
+              cmg.fillStyle = "#000";
+              cmg.fillRect(0, 0, combinedMask.width, combinedMask.height);
+
+              // Draw stencil mask (white = keep paint)
+              cmg.globalCompositeOperation = "source-over";
+              cmg.save();
+              cmg.translate(
+                Math.round(sx * this.dpr),
+                Math.round(sy * this.dpr)
+              );
+              cmg.rotate(instance.rotation);
+              cmg.scale(instance.scale * this.dpr, instance.scale * this.dpr);
+              cmg.translate(-m.width / 2, -m.height / 2);
+              cmg.drawImage(m, 0, 0);
+              cmg.restore();
+
+              // Add drip regions (white = keep paint) using lighten (OR operation)
+              cmg.globalCompositeOperation = "lighten";
+              cmg.drawImage(
+                dripMask,
+                Math.floor(bbox.x * this.dpr),
+                Math.floor(bbox.y * this.dpr),
+                Math.ceil(bbox.w * this.dpr),
+                Math.ceil(bbox.h * this.dpr),
+                0,
+                0,
+                Math.ceil(bbox.w * this.dpr),
+                Math.ceil(bbox.h * this.dpr)
+              );
+
+              // Apply combined mask to paint: keep paint where mask is white
+              cg.clearRect(0, 0, clip.width, clip.height);
+              cg.drawImage(paintRegion, 0, 0);
+              cg.globalCompositeOperation = "destination-in";
+              cg.drawImage(combinedMask, 0, 0);
+            }
+
             // Clear the original region and composite the masked result back
             this.paintCtx.save();
             this.paintCtx.globalCompositeOperation = "destination-out";
@@ -2881,9 +3016,61 @@ class StencilApp {
             this.paintCtx.globalCompositeOperation = "source-over";
             this.paintCtx.drawImage(clip, bbox.x, bbox.y, bbox.w, bbox.h);
             this.paintCtx.restore();
+
+            // If we have a drip mask, restore drip regions that were masked out
+            // This preserves drips that extend outside the stencil mask
+            // NOTE: This must happen BEFORE strokeCanvas is cleared
+            if (dripMask) {
+              // Extract drip regions from strokeCanvas (before it gets cleared)
+              // and composite them back onto paintCanvas, bypassing the stencil mask
+              const dripRegion = document.createElement("canvas");
+              dripRegion.width = Math.ceil(bbox.w * this.dpr);
+              dripRegion.height = Math.ceil(bbox.h * this.dpr);
+              const drg = dripRegion.getContext("2d");
+
+              // Draw from the saved copy of strokeCanvas (contains original drips)
+              drg.drawImage(
+                strokeCanvasCopy,
+                Math.floor(bbox.x * this.dpr),
+                Math.floor(bbox.y * this.dpr),
+                Math.ceil(bbox.w * this.dpr),
+                Math.ceil(bbox.h * this.dpr),
+                0,
+                0,
+                Math.ceil(bbox.w * this.dpr),
+                Math.ceil(bbox.h * this.dpr)
+              );
+
+              // Mask to only keep drip regions
+              drg.globalCompositeOperation = "destination-in";
+              drg.drawImage(
+                dripMask,
+                Math.floor(bbox.x * this.dpr),
+                Math.floor(bbox.y * this.dpr),
+                Math.ceil(bbox.w * this.dpr),
+                Math.ceil(bbox.h * this.dpr),
+                0,
+                0,
+                Math.ceil(bbox.w * this.dpr),
+                Math.ceil(bbox.h * this.dpr)
+              );
+
+              // Composite drip regions back onto paintCanvas (preserves drips)
+              // This restores drips that were removed by the stencil mask
+              this.paintCtx.save();
+              this.paintCtx.globalCompositeOperation = "source-over";
+              this.paintCtx.drawImage(
+                dripRegion,
+                bbox.x,
+                bbox.y,
+                bbox.w,
+                bbox.h
+              );
+              this.paintCtx.restore();
+            }
           }
 
-          // Clear the stroke layer after compositing
+          // Clear the stroke layer after compositing (AFTER we've extracted drips)
           this.strokeCtx.clearRect(
             0,
             0,
@@ -3207,9 +3394,7 @@ class StencilApp {
 
 // bootstrap
 (() => {
-  if (document.readyState === "loading") {
-    document.addEventListener("DOMContentLoaded", () => new StencilApp());
-  } else {
-    new StencilApp();
-  }
+  const app = new StencilApp();
+  // Store globally for tooltip management and debugging
+  window.stencilApp = app;
 })();
