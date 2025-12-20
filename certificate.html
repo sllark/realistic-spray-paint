@@ -116,7 +116,7 @@
       }
 
       .spray-cans img {
-        width: 20px;
+        width: 30px;
         height: auto;
         object-fit: contain;
         object-position: center bottom;
@@ -125,7 +125,7 @@
       }
 
       .spray-cans img.selected {
-        width: 30px;
+        width: 35px;
       }
 
       #guideCanvas {
@@ -188,17 +188,20 @@
         <!-- Certificate base image (shown after peel) -->
         <img
           id="certificateBaseImage"
-          src="assets/certificate-base.jpg"
+          src="assets/certificate-base.png"
           alt="Certificate Base"
           class="certificate-base"
           style="
             display: none;
             position: absolute;
-            inset: 0;
-            width: 100%;
-            height: 100%;
             object-fit: contain;
             pointer-events: none;
+            width: 105%;
+            height: 100%;
+            object-fit: cover;
+            pointer-events: none;
+            left: -17px;
+            top: 5px;
           "
         />
 

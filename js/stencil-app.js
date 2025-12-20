@@ -1573,13 +1573,15 @@ class StencilApp {
       this.activePointers.set(e.pointerId, pt);
 
     // Peeling takes precedence over all other interactions (including spraying).
+    // Note: Drag is disabled - peel completes immediately on click, so we skip drag updates
     if (
       this.peelState &&
       this.peelState.dragging &&
       e.pointerId === this.peelState.pointerId
     ) {
       e.preventDefault();
-      this.updatePeelDrag(pt.x, pt.y);
+      // Skip drag updates - peel completes immediately on click
+      // this.updatePeelDrag(pt.x, pt.y);
       return;
     }
 
@@ -1703,14 +1705,16 @@ class StencilApp {
   }
 
   onPointerUp(e) {
-    if (
-      this.peelState &&
-      this.peelState.dragging &&
-      e.pointerId === this.peelState.pointerId
-    ) {
-      e.preventDefault();
-      this.releasePeel();
-    }
+    // Skip releasePeel - peel completes immediately on click, no drag needed
+    // Since dragging is set to false in tryStartPeel, this block won't execute
+    // if (
+    //   this.peelState &&
+    //   this.peelState.dragging &&
+    //   e.pointerId === this.peelState.pointerId
+    // ) {
+    //   e.preventDefault();
+    //   this.releasePeel();
+    // }
     if (e.pointerId === this.activePointerId) {
       this.activePointerId = null;
       this.draggingInstanceId = null;
@@ -2598,6 +2602,7 @@ class StencilApp {
       this.getPeelHandleRadius(inst) * (this.peelHintUnlocked ? 1.65 : 1.25);
     if (Math.hypot(x - anchor.x, y - anchor.y) > r) return false;
 
+    // Immediately trigger peel animation to completion (no drag needed)
     const maxLen = this.computePeelMaxLen(inst);
     this.peelState.instId = inst.id;
     this.peelState.pointerId = pointerId;
@@ -2606,12 +2611,18 @@ class StencilApp {
     this.peelState.maxLen = maxLen;
     this.peelState.tip = { x: anchor.x, y: anchor.y };
     this.peelState.progress = 0.001;
-    this.peelState.dragging = true;
+    this.peelState.dragging = false; // Don't set dragging to true - we'll animate immediately
     this.peelState.removed = false;
     this.peelState.fadeAlpha = 1;
     this.peelState.autoTriggered = false;
     this.peelState.animToken++;
-    this.redrawGuides();
+
+    // Immediately animate to completion and remove stencil
+    this.animatePeelTo(1, {
+      removeOnComplete: true,
+      fadeOutOnComplete: false,
+    });
+
     return true;
   }
 
