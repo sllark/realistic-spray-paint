@@ -1026,7 +1026,7 @@ class StencilApp {
       ? Math.max(1, rect.height)
       : Math.max(400, rect.height);
 
-    // Ensure landscape orientation on mobile (width > height for 16:9)
+    // Ensure landscape orientation on mobile (width > height)
     if (isMobileLandscape && isPortrait && h > w) {
       // If somehow height > width, swap them to maintain landscape
       [w, h] = [h, w];
@@ -1068,15 +1068,8 @@ class StencilApp {
     let bitmap = this.assetBitmaps[key];
     if (!bitmap) return;
 
-    // Crop certificate consistently so it matches the stage background framing.
-    if (key === "certificate") {
-      bitmap = this.getCroppedBitmap(key, {
-        top: 0.0575,
-        bottom: 0.0575,
-        left: 0.0256,
-        right: 0.0256,
-      });
-    }
+    // Use the full certificate image without cropping
+    // (Previously cropped, but now using full 3266×1832 dimensions)
 
     const stageW = this.guideCanvas.width / this.dpr;
     const stageH = this.guideCanvas.height / this.dpr;

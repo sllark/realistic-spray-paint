@@ -132,15 +132,15 @@
 
       .spray-cans {
         position: absolute;
-        left: 45px;
-        bottom: calc(env(safe-area-inset-bottom) + 4px);
+        left: 80px;
+        bottom: calc(env(safe-area-inset-bottom) + 5px);
         display: flex;
         gap: 10px;
         z-index: 5;
       }
 
       .spray-cans img {
-        width: 30px;
+        width: calc(var(--spray-can-size, 35px));
         height: auto;
         object-fit: contain;
         object-position: center bottom;
@@ -149,7 +149,9 @@
       }
 
       .spray-cans img.selected {
-        width: 35px;
+        width: calc(
+          var(--spray-can-size, 35px) * 1.086
+        ); /* ~38px when base is 35px */
       }
 
       #guideCanvas {
@@ -212,19 +214,38 @@
         width: 195px;
       }
 
-      /* Small screens: keep cans smaller and OUTSIDE the canvas */
-      @media (max-width: 768px) {
-        .spray-cans {
-          position: absolute;
-          z-index: 10002;
-          gap: 8px;
-        }
-        .spray-cans img {
-          width: 26px;
-        }
-        .spray-cans img.selected {
-          width: 32px;
-        }
+      /* iOS Orientation Lock Modal */
+      #iosOrientationModal {
+        position: fixed;
+        top: 50%;
+        left: 50%;
+        transform: translate(-50%, -50%);
+        background: rgba(0, 0, 0, 0.9);
+        color: #fff;
+        padding: 20px 24px;
+        border-radius: 8px;
+        font-size: 14px;
+        font-weight: 500;
+        text-align: center;
+        text-transform: uppercase;
+        z-index: 10004;
+        opacity: 0;
+        pointer-events: none;
+        transition: opacity 0.4s ease, transform 0.4s ease;
+        box-shadow: 0 8px 24px rgba(0, 0, 0, 0.5);
+        max-width: 280px;
+        line-height: 1.4;
+      }
+
+      #iosOrientationModal.show {
+        opacity: 1;
+        pointer-events: auto;
+        transform: translate(-50%, -50%) scale(1);
+      }
+
+      #iosOrientationModal.hide {
+        opacity: 0;
+        transform: translate(-50%, -50%) scale(0.9);
       }
 
       /* Force landscape presentation on portrait mobile by rotating the app. */
@@ -254,6 +275,10 @@
           transform: rotate(-90deg);
           transform-origin: center center;
         }
+
+        .spray-cans {
+          left: 60px;
+        }
       }
     </style>
   </head>
@@ -280,12 +305,12 @@
             position: absolute;
             object-fit: contain;
             pointer-events: none;
-            width: 105%;
+            width: 100%;
             height: 100%;
             object-fit: cover;
             pointer-events: none;
-            left: -17px;
-            top: 5px;
+            left: 0;
+            top: 0;
           "
         />
 
@@ -318,6 +343,11 @@
       </div>
     </div>
 
+     <!-- iOS Orientation Lock Modal -->
+     <div id="iosOrientationModal">
+      LOCK YOUR SCREEN ORIENTATION FOR BEST EXPERIENCE
+    </div>
+    
     <script>
       // Fix Safari mobile viewport height issue
       (function () {
@@ -361,38 +391,28 @@
         });
       })();
 
-      // Keep the stage sized to the certificate asset aspect ratio (3266×1951).
+      // Keep the stage sized to the certificate asset aspect ratio (3266×1832).
       (function () {
         const FULL_W = 3266;
-        const FULL_H = 1951;
-        const CROP_TB = 0.0575; // 5.75% top and bottom
-        const CROP_LR = 0.0256; // 2.56% left and right
-        const cropRect = (w, h) => {
-          const sx = Math.round(w * CROP_LR);
-          const ex = Math.round(w * (1 - CROP_LR));
-          const sy = Math.round(h * CROP_TB);
-          const ey = Math.round(h * (1 - CROP_TB));
-          return { sx, sy, sw: Math.max(1, ex - sx), sh: Math.max(1, ey - sy) };
-        };
-        const cr = cropRect(FULL_W, FULL_H);
-        const cropAR = cr.sw / cr.sh;
-        const TARGET_AR = 16 / 9; // force landscape 16:9 for stage + canvases
+        const FULL_H = 1832;
+        // Calculate the actual aspect ratio of the certificate image
+        const CERTIFICATE_AR = FULL_W / FULL_H; // ≈ 1.782
         const stage = document.getElementById("certificateStage");
         const bgCanvas = document.getElementById("stageBg");
         if (!stage) return;
 
         const bgImg = new Image();
-        bgImg.src = "assets/certificate-stencil-bg.png";
+        bgImg.src = "assets/certificate-stencil-bg.jpg";
         // bgImg.src = "assets/canvas-bg.png";
 
         function fitStage() {
-          // Force a 16:9 landscape viewport for the stage, bounded by window size.
+          // Fit the full certificate to the viewport without cropping
           const isMobile = window.matchMedia("(max-width: 768px)").matches;
           const isPortrait =
             window.matchMedia &&
             window.matchMedia("(orientation: portrait)").matches;
 
-          // On mobile, always force landscape mode (16:9)
+          // On mobile, always force landscape mode
           // When device is in portrait, swap dimensions: device height becomes width, width becomes height
           let viewW, viewH;
           if (isMobile && isPortrait) {
@@ -415,23 +435,38 @@
             );
           }
 
-          // Calculate dimensions maintaining 16:9 aspect ratio
-          let w = viewW;
-          let h = Math.round(w / TARGET_AR);
-          if (h > viewH) {
-            h = viewH;
-            w = Math.round(h * TARGET_AR);
+          // Fit the certificate to viewport: try to use full height first, then adjust width
+          // This ensures we show the full certificate without cropping
+          let h = viewH;
+          let w = Math.round(h * CERTIFICATE_AR);
+
+          // If width exceeds viewport, fit by width instead
+          if (w > viewW) {
+            w = viewW;
+            h = Math.round(w / CERTIFICATE_AR);
           }
+
           const wPx = Math.round(w);
           const hPx = Math.round(h);
           stage.style.width = wPx + "px";
           stage.style.height = hPx + "px";
 
+          // Update spray can size to scale with canvas
+          // Use ~3.5% of canvas height, with min/max bounds for readability
+          const sprayCanSize = Math.max(
+            30,
+            Math.min(100, Math.round(hPx * 0.09))
+          );
+          document.documentElement.style.setProperty(
+            "--spray-can-size",
+            `${sprayCanSize}px`
+          );
+
           // Store orientation info for canvas resize functions
           window.__certificateLandscapeMode = isMobile;
           window.__certificateIsPortrait = isPortrait;
 
-          // (Re)draw background to match the current stage size & crop mode
+          // (Re)draw background to match the current stage size
           drawBg();
         }
 
@@ -448,12 +483,13 @@
           g.setTransform(dpr, 0, 0, dpr, 0, 0);
           g.clearRect(0, 0, w, h);
           if (!bgImg.complete || !bgImg.naturalWidth) return;
+          // Draw the full image without cropping
           const srcW = bgImg.naturalWidth || FULL_W;
           const srcH = bgImg.naturalHeight || FULL_H;
-          const r = cropRect(srcW, srcH);
           g.imageSmoothingEnabled = true;
           g.imageSmoothingQuality = "high";
-          g.drawImage(bgImg, r.sx, r.sy, r.sw, r.sh, 0, 0, w, h);
+          // Draw the full image, scaled to fit the canvas dimensions
+          g.drawImage(bgImg, 0, 0, srcW, srcH, 0, 0, w, h);
 
           // Notify StencilApp so it can capture a clean base and apply peel to stageBg too.
           window.dispatchEvent(
@@ -630,6 +666,44 @@
           if (peelHintTooltip) {
             peelHintTooltip.classList.remove("show");
           }
+        });
+      })();
+
+      // iOS Orientation Lock Modal
+      (function () {
+        // Detect iOS
+        const isIOS =
+          /iPad|iPhone|iPod/.test(navigator.userAgent) ||
+          (navigator.platform === "MacIntel" && navigator.maxTouchPoints > 1);
+
+        const isMobile = window.matchMedia("(max-width: 768px)").matches;
+
+        if (!isIOS || !isMobile) return;
+
+        const modal = document.getElementById("iosOrientationModal");
+        if (!modal) return;
+
+        // Show modal after a short delay on page load
+        setTimeout(() => {
+          modal.classList.add("show");
+        }, 1000);
+
+        // Hide modal when user taps/clicks on it or after 5 seconds
+        let hideTimeout = setTimeout(() => {
+          modal.classList.remove("show");
+          modal.classList.add("hide");
+          setTimeout(() => {
+            modal.style.display = "none";
+          }, 400);
+        }, 5000);
+
+        modal.addEventListener("click", () => {
+          clearTimeout(hideTimeout);
+          modal.classList.remove("show");
+          modal.classList.add("hide");
+          setTimeout(() => {
+            modal.style.display = "none";
+          }, 400);
         });
       })();
     </script>
