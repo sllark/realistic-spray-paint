@@ -106,10 +106,6 @@
         touch-action: none;
       }
 
-      .tray {
-        display: none;
-      }
-
       .hud {
         position: absolute;
         left: 10px;
@@ -214,6 +210,31 @@
         width: 195px;
       }
 
+      .tooltip-progress-warning {
+        top: 10%;
+        left: 80%;
+        transform: translate(-50%, -50%);
+        width: 220px;
+        text-align: center;
+        font-size: 14px;
+        padding: 16px 20px;
+        background: rgba(220, 53, 69, 0.95);
+        border: 2px solid rgba(255, 255, 255, 0.3);
+        animation: tooltipPulse 2s ease-in-out infinite;
+      }
+
+      @keyframes tooltipPulse {
+        0%,
+        100% {
+          transform: translate(-50%, -50%) scale(1);
+          box-shadow: 0 4px 12px rgba(0, 0, 0, 0.3);
+        }
+        50% {
+          transform: translate(-50%, -50%) scale(1.05);
+          box-shadow: 0 6px 20px rgba(220, 53, 69, 0.5);
+        }
+      }
+
       /* iOS Orientation Lock Modal */
       #iosOrientationModal {
         position: fixed;
@@ -291,9 +312,6 @@
       <div class="stage" id="certificateStage">
         <canvas id="stageBg" class="stage-bg"></canvas>
 
-        <!-- Keep tray element for compatibility, but it stays hidden in this mode -->
-        <div class="tray" id="stencilTray"></div>
-
         <!-- Certificate base image (shown after peel) -->
         <img
           id="certificateBaseImage"
@@ -340,14 +358,21 @@
         <div id="peelHintTooltip" class="tooltip tooltip-peel-hint">
           PEEL AWAY THE STENCIL WHEN YOU'VE FINISHED YOUR GRAFFITI
         </div>
+
+        <div
+          id="progressWarningTooltip"
+          class="tooltip tooltip-progress-warning"
+        >
+          PLEASE SPRAY THE FULL STENCIL!
+        </div>
       </div>
     </div>
 
-     <!-- iOS Orientation Lock Modal -->
-     <div id="iosOrientationModal">
+    <!-- iOS Orientation Lock Modal -->
+    <div id="iosOrientationModal">
       LOCK YOUR SCREEN ORIENTATION FOR BEST EXPERIENCE
     </div>
-    
+
     <script>
       // Fix Safari mobile viewport height issue
       (function () {
@@ -407,7 +432,25 @@
 
         function fitStage() {
           // Fit the full certificate to the viewport without cropping
-          const isMobile = window.matchMedia("(max-width: 768px)").matches;
+          // Check for mobile in both portrait and landscape orientations
+          const isSmallWidth = window.matchMedia("(max-width: 768px)").matches;
+          const isSmallHeight = window.matchMedia(
+            "(max-height: 768px)"
+          ).matches;
+          const hasTouch =
+            "ontouchstart" in window ||
+            (navigator.maxTouchPoints && navigator.maxTouchPoints > 0);
+          const isMobileLandscape =
+            typeof window !== "undefined" &&
+            window.__certificateLandscapeMode === true;
+
+          const isMobile =
+            isSmallWidth ||
+            isSmallHeight ||
+            (hasTouch &&
+              (window.innerWidth <= 1024 || window.innerHeight <= 1024)) ||
+            isMobileLandscape;
+
           const isPortrait =
             window.matchMedia &&
             window.matchMedia("(orientation: portrait)").matches;
@@ -516,7 +559,23 @@
 
       // Fullscreen functionality for mobile (Android and other non-iOS devices)
       (function () {
-        const isMobile = window.matchMedia("(max-width: 768px)").matches;
+        // Check for mobile in both portrait and landscape orientations
+        const isSmallWidth = window.matchMedia("(max-width: 768px)").matches;
+        const isSmallHeight = window.matchMedia("(max-height: 768px)").matches;
+        const hasTouch =
+          "ontouchstart" in window ||
+          (navigator.maxTouchPoints && navigator.maxTouchPoints > 0);
+        const isMobileLandscape =
+          typeof window !== "undefined" &&
+          window.__certificateLandscapeMode === true;
+
+        const isMobile =
+          isSmallWidth ||
+          isSmallHeight ||
+          (hasTouch &&
+            (window.innerWidth <= 1024 || window.innerHeight <= 1024)) ||
+          isMobileLandscape;
+
         if (!isMobile) return;
 
         // Detect iOS - skip fullscreen on iOS as it's not supported
@@ -612,7 +671,7 @@
       })();
     </script>
     <script src="js/spray.js"></script>
-    <script src="js/stencil-app.js"></script>
+    <script src="js/certificate-stencil-app.js"></script>
     <script>
       // Tooltip management
       (function () {
@@ -620,11 +679,67 @@
         const peelHintTooltip = document.getElementById("peelHintTooltip");
         const sprayCans = document.getElementById("sprayCans");
 
-        // Show spray cans tooltip on page load
-        if (sprayCansTooltip) {
-          // Small delay to ensure page is fully loaded
+        // Detect iOS
+        const isIOS =
+          /iPad|iPhone|iPod/.test(navigator.userAgent) ||
+          (navigator.platform === "MacIntel" && navigator.maxTouchPoints > 1);
+
+        // Check for mobile in both portrait and landscape orientations
+        const isSmallWidth = window.matchMedia("(max-width: 768px)").matches;
+        const isSmallHeight = window.matchMedia("(max-height: 768px)").matches;
+        const hasTouch =
+          "ontouchstart" in window ||
+          (navigator.maxTouchPoints && navigator.maxTouchPoints > 0);
+        // Also check if we're in certificate landscape mode (indicates mobile)
+        const isMobileLandscape =
+          typeof window !== "undefined" &&
+          window.__certificateLandscapeMode === true;
+
+        // Consider it mobile if: small width OR small height OR has touch + small screen OR mobile landscape mode
+        const isMobile =
+          isSmallWidth ||
+          isSmallHeight ||
+          (hasTouch &&
+            (window.innerWidth <= 1024 || window.innerHeight <= 1024)) ||
+          isMobileLandscape;
+
+        // Function to show spray cans tooltip (with guard to prevent duplicates)
+        let tooltipShown = false;
+        const showSprayCansTooltip = () => {
+          if (sprayCansTooltip && !tooltipShown) {
+            tooltipShown = true;
+            setTimeout(() => {
+              sprayCansTooltip.classList.add("show");
+            }, 300); // Small delay for smooth transition
+          }
+        };
+
+        // Show spray cans tooltip - delay if iOS orientation modal is shown
+        if (isIOS && isMobile) {
+          // On iOS, wait for orientation modal to be hidden
+          // Listen for the custom event when modal is fully hidden
+          window.addEventListener(
+            "ios-orientation-modal-hidden",
+            () => {
+              showSprayCansTooltip();
+            },
+            { once: true }
+          );
+
+          // Fallback: if event doesn't fire (shouldn't happen), show after max duration
+          // Max duration: 1000ms initial delay + 4000ms display + 300ms fade = 5300ms
           setTimeout(() => {
-            sprayCansTooltip.classList.add("show");
+            if (!tooltipShown) {
+              showSprayCansTooltip();
+            }
+          }, 5300);
+        } else {
+          // On non-iOS, show immediately
+          setTimeout(() => {
+            if (sprayCansTooltip && !tooltipShown) {
+              tooltipShown = true;
+              sprayCansTooltip.classList.add("show");
+            }
           }, 500);
         }
 
@@ -667,6 +782,27 @@
             peelHintTooltip.classList.remove("show");
           }
         });
+
+        // Progress warning tooltip management
+        const progressWarningTooltip = document.getElementById(
+          "progressWarningTooltip"
+        );
+
+        // Show progress warning when user is taking too long
+        window.addEventListener("stencil:progress-warning-show", (e) => {
+          if (progressWarningTooltip) {
+            setTimeout(() => {
+              progressWarningTooltip.classList.add("show");
+            }, 500);
+          }
+        });
+
+        // Hide progress warning
+        window.addEventListener("stencil:progress-warning-hide", () => {
+          if (progressWarningTooltip) {
+            progressWarningTooltip.classList.remove("show");
+          }
+        });
       })();
 
       // iOS Orientation Lock Modal
@@ -676,7 +812,24 @@
           /iPad|iPhone|iPod/.test(navigator.userAgent) ||
           (navigator.platform === "MacIntel" && navigator.maxTouchPoints > 1);
 
-        const isMobile = window.matchMedia("(max-width: 768px)").matches;
+        // Check for mobile in both portrait and landscape orientations
+        const isSmallWidth = window.matchMedia("(max-width: 768px)").matches;
+        const isSmallHeight = window.matchMedia("(max-height: 768px)").matches;
+        const hasTouch =
+          "ontouchstart" in window ||
+          (navigator.maxTouchPoints && navigator.maxTouchPoints > 0);
+        // Also check if we're in certificate landscape mode (indicates mobile)
+        const isMobileLandscape =
+          typeof window !== "undefined" &&
+          window.__certificateLandscapeMode === true;
+
+        // Consider it mobile if: small width OR small height OR has touch + small screen OR mobile landscape mode
+        const isMobile =
+          isSmallWidth ||
+          isSmallHeight ||
+          (hasTouch &&
+            (window.innerWidth <= 1024 || window.innerHeight <= 1024)) ||
+          isMobileLandscape;
 
         if (!isIOS || !isMobile) return;
 
@@ -688,22 +841,27 @@
           modal.classList.add("show");
         }, 1000);
 
-        // Hide modal when user taps/clicks on it or after 5 seconds
-        let hideTimeout = setTimeout(() => {
+        // Function to hide modal and dispatch event
+        const hideModal = () => {
           modal.classList.remove("show");
           modal.classList.add("hide");
           setTimeout(() => {
             modal.style.display = "none";
-          }, 400);
-        }, 5000);
+            // Dispatch custom event when modal is fully hidden
+            window.dispatchEvent(
+              new CustomEvent("ios-orientation-modal-hidden")
+            );
+          }, 300);
+        };
+
+        // Hide modal when user taps/clicks on it or after 5 seconds
+        let hideTimeout = setTimeout(() => {
+          hideModal();
+        }, 4000);
 
         modal.addEventListener("click", () => {
           clearTimeout(hideTimeout);
-          modal.classList.remove("show");
-          modal.classList.add("hide");
-          setTimeout(() => {
-            modal.style.display = "none";
-          }, 400);
+          hideModal();
         });
       })();
     </script>
