@@ -61,7 +61,7 @@ class ShakeSprayPrank {
     this.requestMotionPermission();
 
     // Debug panel disabled for production use
-    this.createDebugPanel();
+    // this.createDebugPanel();
 
     // Set up user gesture listeners to unlock audio early
     this.setupAudioUnlock();
