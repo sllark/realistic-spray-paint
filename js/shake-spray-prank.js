@@ -16,7 +16,8 @@ class ShakeSprayPrank {
     this.isRattling = false;
     this.isSpraying = false;
     this.shakeThreshold = 30; // Higher threshold to require a vigorous shake
-    this.SPRAY_MOTION_THRESHOLD = 13; // Threshold for side-to-side spray motion
+    this.SPRAY_MOTION_THRESHOLD = 9; // Threshold for side-to-side spray motion
+    this.SPRAY_MIN_TOTAL_DELTA = 16; // Minimum overall motion to count as spray sweep
     this.SPRAY_STOP_DELAY_MS = 1000; // How long to wait after last spray motion to stop spray sound
     this.shakeTimeout = null;
     this.stopCountdownTimeout = null;
@@ -29,9 +30,10 @@ class ShakeSprayPrank {
     this.ORIENTATION_SHAKE_THRESHOLD = 22; // Orientation-based shake sensitivity (requires stronger movement)
     this.ORIENTATION_SPRAY_THRESHOLD = 12; // Orientation-based spray sensitivity
     this.RATTLE_STOP_DELAY_MS = 1500;
-    this.MOTION_ACTIVITY_THRESHOLD = 6; // Keep session alive while small shakes continue
+    this.MODE_SWITCH_LOCK_MS = 400; // Minimum delay between switching rattle/spray
     this.rattleStopTimeout = null;
     this.sprayStopTimeout = null;
+    this.modeLockUntil = 0;
 
     // Audio elements
     this.rattleAudio = null;
@@ -61,7 +63,7 @@ class ShakeSprayPrank {
     this.requestMotionPermission();
 
     // Debug panel disabled for production use
-    // this.createDebugPanel();
+    this.createDebugPanel();
 
     // Set up user gesture listeners to unlock audio early
     this.setupAudioUnlock();
@@ -692,7 +694,6 @@ class ShakeSprayPrank {
     const deltaAlpha = Math.abs(alpha - (this.lastOrientation.alpha || 0));
 
     const totalChange = deltaBeta + deltaGamma + deltaAlpha;
-    const hasMotion = totalChange > this.MOTION_ACTIVITY_THRESHOLD;
 
     // Update last orientation
     this.lastOrientation = { beta, gamma, alpha };
@@ -723,7 +724,7 @@ class ShakeSprayPrank {
       this.queueSprayStop();
     }
 
-    if (hardShake || sideSweep || (this.isActive && hasMotion)) {
+    if (hardShake || sideSweep) {
       this.startStopCountdown();
     }
   }
@@ -760,7 +761,6 @@ class ShakeSprayPrank {
     const deltaZ = Math.abs(z - this.lastAcceleration.z);
 
     const totalDelta = deltaX + deltaY + deltaZ;
-    const hasMotion = totalDelta > this.MOTION_ACTIVITY_THRESHOLD;
 
     // Update last acceleration
     this.lastAcceleration = { x, y, z };
@@ -772,7 +772,8 @@ class ShakeSprayPrank {
       verticalMotion >= lateralMotion * 0.8;
     const sideSweep =
       lateralMotion > this.SPRAY_MOTION_THRESHOLD &&
-      lateralMotion > verticalMotion * 0.75;
+      totalDelta > this.SPRAY_MIN_TOTAL_DELTA &&
+      lateralMotion > verticalMotion * 0.7;
 
     // Give priority to side sweeps for spray; otherwise allow hard shake for rattle
     if (sideSweep) {
@@ -788,7 +789,7 @@ class ShakeSprayPrank {
       this.queueSprayStop();
     }
 
-    if (hardShake || sideSweep || (this.isActive && hasMotion)) {
+    if (hardShake || sideSweep) {
       this.startStopCountdown();
     }
   }
@@ -888,6 +889,8 @@ class ShakeSprayPrank {
 
   startRattleMotion() {
     if (!this.rattleAudio) return;
+    const now = Date.now();
+    if (this.isSpraying && now < this.modeLockUntil) return;
 
     // Stop spray if it's currently active to avoid overlap
     if (this.isSpraying) {
@@ -911,10 +914,13 @@ class ShakeSprayPrank {
         console.warn("[ShakeSpray] Failed to play rattle sound:", error);
       });
     }
+    this.modeLockUntil = Date.now() + this.MODE_SWITCH_LOCK_MS;
   }
 
   startSprayMotion() {
     if (!this.sprayAudio) return;
+    const now = Date.now();
+    if (this.isRattling && now < this.modeLockUntil) return;
 
     // Stop rattle if it's currently active to avoid overlap
     if (this.isRattling) {
@@ -934,6 +940,7 @@ class ShakeSprayPrank {
     if (this.sprayAudio.paused || this.sprayAudio.ended) {
       this.startSpraySound();
     }
+    this.modeLockUntil = Date.now() + this.MODE_SWITCH_LOCK_MS;
   }
 
   startStopCountdown() {
