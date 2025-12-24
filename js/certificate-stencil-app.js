@@ -52,6 +52,7 @@ class StencilApp {
     };
     this._peelHintWasVisible = false;
     this._prankStarted = false; // ensure prank triggers only once after reveal
+    this._prankTooltipTimeout = null;
     this.peelBackImageUrl =
       (document.body &&
         document.body.dataset &&
@@ -2681,6 +2682,8 @@ class StencilApp {
     if (this._prankStarted) return;
     this._prankStarted = true;
 
+    this.showPrankTooltip();
+
     try {
       if (typeof window !== "undefined" && typeof window.ShakeSprayPrank === "function") {
         // Reuse existing instance if it exists; otherwise create one.
@@ -2700,6 +2703,48 @@ class StencilApp {
     } catch (e) {
       console.warn("Failed to dispatch shake prank event:", e);
     }
+  }
+
+  showPrankTooltip() {
+    if (typeof document === "undefined") return;
+
+    // Remove existing tooltip if present
+    const existing = document.getElementById("shakePrankTooltip");
+    if (existing && existing.parentNode) {
+      existing.parentNode.removeChild(existing);
+    }
+    if (this._prankTooltipTimeout) {
+      clearTimeout(this._prankTooltipTimeout);
+      this._prankTooltipTimeout = null;
+    }
+
+    const tooltip = document.createElement("div");
+    tooltip.id = "shakePrankTooltip";
+    tooltip.textContent = "Shake your phone to start the prank!";
+    tooltip.style.cssText = `
+      position: fixed;
+      left: 50%;
+      bottom: 28px;
+      transform: translateX(-50%);
+      background: rgba(0, 0, 0, 0.85);
+      color: #fff;
+      padding: 10px 14px;
+      border-radius: 18px;
+      font-size: 14px;
+      font-weight: 600;
+      z-index: 100004;
+      pointer-events: none;
+      box-shadow: 0 4px 12px rgba(0,0,0,0.25);
+    `;
+
+    document.body.appendChild(tooltip);
+
+    this._prankTooltipTimeout = setTimeout(() => {
+      if (tooltip && tooltip.parentNode) {
+        tooltip.parentNode.removeChild(tooltip);
+      }
+      this._prankTooltipTimeout = null;
+    }, 3000);
   }
 
   drawPeelEffect(g, inst, peel) {
