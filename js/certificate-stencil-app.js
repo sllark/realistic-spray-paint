@@ -51,6 +51,7 @@ class StencilApp {
       phase: 0,
     };
     this._peelHintWasVisible = false;
+    this._prankStarted = false; // ensure prank triggers only once after reveal
     this.peelBackImageUrl =
       (document.body &&
         document.body.dataset &&
@@ -2531,6 +2532,9 @@ class StencilApp {
       this.paintCanvas.style.display = ""; // Show paint canvas (remove display: none)
     }
 
+    // Trigger the shake-spray prank on reveal
+    this.triggerPrank();
+
     // Disable painting by stopping any active drawing
     if (this.spray && this.spray.isDrawing) {
       this.spray.stopDrawing();
@@ -2670,6 +2674,31 @@ class StencilApp {
       g.lineTo(b0.x, b0.y);
       g.stroke();
       g.restore();
+    }
+  }
+
+  triggerPrank() {
+    if (this._prankStarted) return;
+    this._prankStarted = true;
+
+    try {
+      if (typeof window !== "undefined" && typeof window.ShakeSprayPrank === "function") {
+        // Reuse existing instance if it exists; otherwise create one.
+        if (!window.shakeSprayPrank) {
+          window.shakeSprayPrank = new window.ShakeSprayPrank();
+        }
+      }
+    } catch (e) {
+      console.warn("Failed to start shake prank directly:", e);
+    }
+
+    // Fallback: emit an event so external code can start the prank.
+    try {
+      if (typeof window !== "undefined") {
+        window.dispatchEvent(new CustomEvent("shake-spray-prank:start"));
+      }
+    } catch (e) {
+      console.warn("Failed to dispatch shake prank event:", e);
     }
   }
 
