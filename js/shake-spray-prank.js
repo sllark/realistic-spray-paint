@@ -13,20 +13,25 @@ class ShakeSprayPrank {
   constructor() {
     this.isActive = false;
     this.isShaking = false;
-    this.shakeStartTime = null;
-    this.lastShakeTime = null;
-    this.shakeThreshold = 26; // Tuned threshold to reduce false positives without needing an aggressive shake
+    this.isRattling = false;
+    this.isSpraying = false;
+    this.shakeThreshold = 30; // Higher threshold to require a vigorous shake
+    this.SPRAY_MOTION_THRESHOLD = 13; // Threshold for side-to-side spray motion
+    this.SPRAY_STOP_DELAY_MS = 1000; // How long to wait after last spray motion to stop spray sound
     this.shakeTimeout = null;
     this.stopCountdownTimeout = null;
     this.audioUnlocked = false; // Track if audio has been unlocked via user interaction
     this.motionDetectionActive = false;
 
     // Timing constants
-    this.RATTLE_PLAY_COUNT = 1; // Play rattle once, then switch to spray
-    this.RATTLE_PLAY_COUNT_CURRENT = 0; // Track current rattle play count
-    this.SHAKE_STOP_DELAY_MS = 3000; // How long to wait after shaking stops before fading out
+    this.SHAKE_STOP_DELAY_MS = 1500; // How long to wait after shaking stops before fading out
     this.FADE_OUT_DURATION_MS = 1000; // Fade out duration
-    this.ORIENTATION_SHAKE_THRESHOLD = 14; // Orientation-based shake sensitivity
+    this.ORIENTATION_SHAKE_THRESHOLD = 22; // Orientation-based shake sensitivity (requires stronger movement)
+    this.ORIENTATION_SPRAY_THRESHOLD = 12; // Orientation-based spray sensitivity
+    this.RATTLE_STOP_DELAY_MS = 1500;
+    this.MOTION_ACTIVITY_THRESHOLD = 6; // Keep session alive while small shakes continue
+    this.rattleStopTimeout = null;
+    this.sprayStopTimeout = null;
 
     // Audio elements
     this.rattleAudio = null;
@@ -55,15 +60,20 @@ class ShakeSprayPrank {
     // Request motion permission (but don't start listening yet)
     this.requestMotionPermission();
 
-    // Create debug panel for mobile testing
+    // Debug panel disabled for production use
     this.createDebugPanel();
 
     // Set up user gesture listeners to unlock audio early
     this.setupAudioUnlock();
 
     // Wait for user interaction to unlock audio, then wait for shake
-    // TODO: Move this to activate after certificate completion
-    this.waitForUserInteraction();
+    if (typeof window !== "undefined") {
+      window.addEventListener(
+        "shake-spray-prank:start",
+        () => this.waitForUserInteraction(),
+        { once: true }
+      );
+    }
   }
 
   createDebugPanel() {
@@ -159,7 +169,7 @@ class ShakeSprayPrank {
   loadAudio() {
     // Load rattle audio (spray can shaking) - should play first
     this.rattleAudio = new Audio("assets/audio/shaking-can-spray-paint.wav");
-    this.rattleAudio.loop = false;
+    this.rattleAudio.loop = true; // loop while shaking
     this.rattleAudio.volume = 0.8;
 
     // Load spray audio (spray paint hissing) - should play after rattles
@@ -520,12 +530,10 @@ class ShakeSprayPrank {
 
     this.isActive = false;
     this.isShaking = false;
-    this.shakeStartTime = null;
     this.stopAllAudio();
     this.hideBlackScreen();
 
     // Reset rattle play count
-    this.RATTLE_PLAY_COUNT_CURRENT = 0;
 
     // Clear any pending timeouts
     if (this.shakeTimeout) {
@@ -684,6 +692,7 @@ class ShakeSprayPrank {
     const deltaAlpha = Math.abs(alpha - (this.lastOrientation.alpha || 0));
 
     const totalChange = deltaBeta + deltaGamma + deltaAlpha;
+    const hasMotion = totalChange > this.MOTION_ACTIVITY_THRESHOLD;
 
     // Update last orientation
     this.lastOrientation = { beta, gamma, alpha };
@@ -697,12 +706,25 @@ class ShakeSprayPrank {
       this._lastOrientationLog = Date.now();
     }
 
-    // Detect shake - tuned to ignore gentle tilts but not require aggressive shaking
-    if (totalChange > this.ORIENTATION_SHAKE_THRESHOLD) {
-      // this.addDebugLog(`🎯 SHAKE DETECTED! Change: ${totalChange.toFixed(2)}`);
-      this.onShakeDetected();
+    const sideSweep = Math.abs(deltaGamma) > this.ORIENTATION_SPRAY_THRESHOLD;
+    const hardShake = totalChange > this.ORIENTATION_SHAKE_THRESHOLD;
+
+    // Give priority to spray sweeps; otherwise allow hard shake for rattle
+    if (sideSweep) {
+      this.ensureActive();
+      this.startSprayMotion();
+      this.queueRattleStop();
+    } else if (hardShake) {
+      this.ensureActive();
+      this.startRattleMotion();
+      this.queueSprayStop();
     } else {
-      this.onShakeStopped();
+      this.queueRattleStop();
+      this.queueSprayStop();
+    }
+
+    if (hardShake || sideSweep || (this.isActive && hasMotion)) {
+      this.startStopCountdown();
     }
   }
 
@@ -738,102 +760,50 @@ class ShakeSprayPrank {
     const deltaZ = Math.abs(z - this.lastAcceleration.z);
 
     const totalDelta = deltaX + deltaY + deltaZ;
+    const hasMotion = totalDelta > this.MOTION_ACTIVITY_THRESHOLD;
 
     // Update last acceleration
     this.lastAcceleration = { x, y, z };
 
-    // Detect shake (threshold tuned to avoid auto-trigger on page load)
-    if (totalDelta > this.shakeThreshold) {
-      this.onShakeDetected();
+    const lateralMotion = Math.abs(deltaX);
+    const verticalMotion = Math.abs(deltaY) + Math.abs(deltaZ) * 0.5;
+    const hardShake =
+      totalDelta > this.shakeThreshold &&
+      verticalMotion >= lateralMotion * 0.8;
+    const sideSweep =
+      lateralMotion > this.SPRAY_MOTION_THRESHOLD &&
+      lateralMotion > verticalMotion * 0.75;
+
+    // Give priority to side sweeps for spray; otherwise allow hard shake for rattle
+    if (sideSweep) {
+      this.ensureActive();
+      this.startSprayMotion();
+      this.queueRattleStop();
+    } else if (hardShake) {
+      this.ensureActive();
+      this.startRattleMotion();
+      this.queueSprayStop();
     } else {
-      this.onShakeStopped();
+      this.queueRattleStop();
+      this.queueSprayStop();
+    }
+
+    if (hardShake || sideSweep || (this.isActive && hasMotion)) {
+      this.startStopCountdown();
     }
   }
 
   onShakeDetected() {
-    const now = Date.now();
-    this.lastShakeTime = now;
-
-    // Reset stop countdown so the prank keeps running while shaking
-    if (this.stopCountdownTimeout) {
-      clearTimeout(this.stopCountdownTimeout);
-      this.stopCountdownTimeout = null;
-    }
-
-    // Clear any pending shake stop timeout
-    if (this.shakeTimeout) {
-      clearTimeout(this.shakeTimeout);
-      this.shakeTimeout = null;
-    }
-
-    // If this is the first shake, activate and start the sequence
-    if (!this.isShaking) {
-      this.isShaking = true;
-      this.shakeStartTime = now;
-      this.RATTLE_PLAY_COUNT_CURRENT = 0; // Reset rattle play count
-
-      // Activate prank (show black screen)
-      if (!this.isActive) {
-        this.activate();
-      }
-
-      // Start rattle sound sequence (play once)
-      this.addDebugLog("🔊 Starting rattle sound sequence (1 play)...");
-      this.startRattleSoundSequence();
-    }
-
-    // Always keep countdown running so we stop 3s after the last shake
-    this.startStopCountdown();
+    // Legacy path is unused; motion-specific handlers manage rattle/spray.
   }
 
   onShakeStopped() {
-    if (!this.isShaking) return;
-
-    // Clear any existing timeout
-    if (this.shakeTimeout) {
-      clearTimeout(this.shakeTimeout);
-    }
-
-    // Debounce minor jitters before starting the stop countdown
-    this.shakeTimeout = setTimeout(() => {
-      if (this.isShaking && this.isActive) {
-        this.startStopCountdown();
-      }
-    }, 500); // Small delay to debounce shake detection
+    // Legacy path is unused; motion-specific handlers manage rattle/spray.
   }
 
   startRattleSoundSequence() {
-    if (!this.rattleAudio) return;
-
-    // Stop spray sound if playing
-    this.stopSpraySound();
-
-    // Reset rattle audio
-    this.rattleAudio.currentTime = 0;
-
-    // Remove any existing event listeners
-    this.rattleAudio.removeEventListener("ended", this._rattleEndedHandler);
-
-    // Create handler for when rattle sound ends (single play)
-    this._rattleEndedHandler = () => {
-      this.RATTLE_PLAY_COUNT_CURRENT++;
-      this.addDebugLog("🔊 Rattle sound finished (1/1)");
-
-      // Immediately switch to spray sound
-      if (this.isShaking && this.isActive) {
-        this.addDebugLog("🔊 Switching to spray sound (looping)...");
-        this.startSpraySound();
-      }
-    };
-
-    // Add event listener for when rattle sound ends
-    this.rattleAudio.addEventListener("ended", this._rattleEndedHandler);
-
-    // Play rattle sound (single play)
-    this.rattleAudio.play().catch((error) => {
-      this.addDebugLog("🔊 Failed to play rattle sound:", error.message);
-      console.warn("[ShakeSpray] Failed to play rattle sound:", error);
-    });
+    // Legacy method - map to rattle motion
+    this.startRattleMotion();
   }
 
   startRattleSound() {
@@ -844,13 +814,11 @@ class ShakeSprayPrank {
   startSpraySound() {
     if (!this.sprayAudio) return;
 
-    // Stop rattle sound
-    if (this.rattleAudio && !this.rattleAudio.paused) {
-      this.rattleAudio.pause();
-      this.rattleAudio.currentTime = 0;
+    if (!this.isSpraying) {
+      this.isSpraying = true;
+      this.addDebugLog("🔊 Spray sound started (looping)");
     }
 
-    // Play spray sound (looping)
     this.sprayAudio.currentTime = 0;
     this.sprayAudio.play().catch((error) => {
       this.addDebugLog("🔊 Failed to play spray sound:", error);
@@ -858,14 +826,27 @@ class ShakeSprayPrank {
     });
   }
 
-  stopSpraySound() {
+  stopSpraySound(resetTime = false) {
     if (this.sprayAudio && !this.sprayAudio.paused) {
       this.sprayAudio.pause();
-      this.sprayAudio.currentTime = 0;
+      if (resetTime) {
+        this.sprayAudio.currentTime = 0;
+      }
     }
+    this.isSpraying = false;
   }
 
-  stopRattleSound() {
+  queueSprayStop() {
+    if (this.sprayStopTimeout) {
+      clearTimeout(this.sprayStopTimeout);
+    }
+    this.sprayStopTimeout = setTimeout(() => {
+      this.stopSpraySound(false);
+      this.sprayStopTimeout = null;
+    }, this.SPRAY_STOP_DELAY_MS);
+  }
+
+  stopRattleSound(resetTime = false) {
     if (this.rattleAudio) {
       // Remove event listener if it exists
       if (this._rattleEndedHandler) {
@@ -875,17 +856,84 @@ class ShakeSprayPrank {
 
       if (!this.rattleAudio.paused) {
         this.rattleAudio.pause();
-        this.rattleAudio.currentTime = 0;
+        if (resetTime) {
+          this.rattleAudio.currentTime = 0;
+        }
       }
     }
 
-    // Reset rattle play count
-    this.RATTLE_PLAY_COUNT_CURRENT = 0;
+    this.isRattling = false;
   }
 
   stopAllAudio() {
-    this.stopRattleSound();
-    this.stopSpraySound();
+    this.stopRattleSound(true);
+    this.stopSpraySound(true);
+  }
+
+  queueRattleStop() {
+    if (this.rattleStopTimeout) {
+      clearTimeout(this.rattleStopTimeout);
+    }
+    this.rattleStopTimeout = setTimeout(() => {
+      this.stopRattleSound();
+      this.rattleStopTimeout = null;
+    }, this.RATTLE_STOP_DELAY_MS);
+  }
+
+  ensureActive() {
+    if (!this.isActive) {
+      this.activate();
+    }
+  }
+
+  startRattleMotion() {
+    if (!this.rattleAudio) return;
+
+    // Stop spray if it's currently active to avoid overlap
+    if (this.isSpraying) {
+      this.stopSpraySound(true);
+      this.isSpraying = false;
+      if (this.sprayStopTimeout) {
+        clearTimeout(this.sprayStopTimeout);
+        this.sprayStopTimeout = null;
+      }
+    }
+
+    this.isRattling = true;
+    if (this.rattleStopTimeout) {
+      clearTimeout(this.rattleStopTimeout);
+      this.rattleStopTimeout = null;
+    }
+    if (this.rattleAudio.paused || this.rattleAudio.ended) {
+      this.rattleAudio.currentTime = 0;
+      this.rattleAudio.play().catch((error) => {
+        this.addDebugLog("🔊 Failed to play rattle sound:", error);
+        console.warn("[ShakeSpray] Failed to play rattle sound:", error);
+      });
+    }
+  }
+
+  startSprayMotion() {
+    if (!this.sprayAudio) return;
+
+    // Stop rattle if it's currently active to avoid overlap
+    if (this.isRattling) {
+      this.stopRattleSound(true);
+      this.isRattling = false;
+      if (this.rattleStopTimeout) {
+        clearTimeout(this.rattleStopTimeout);
+        this.rattleStopTimeout = null;
+      }
+    }
+
+    this.isSpraying = true;
+    if (this.sprayStopTimeout) {
+      clearTimeout(this.sprayStopTimeout);
+      this.sprayStopTimeout = null;
+    }
+    if (this.sprayAudio.paused || this.sprayAudio.ended) {
+      this.startSpraySound();
+    }
   }
 
   startStopCountdown() {
